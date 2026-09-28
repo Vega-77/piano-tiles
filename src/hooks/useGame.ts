@@ -1,60 +1,130 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent } from 'react';
 import { LANES } from '../config';
 import { AudioEngine } from '../game/audio';
-import { GameEngine, createInitialState, type GameOverResult } from '../game/engine';
-import { loadHighScore } from '../game/storage';
-import type { GameState } from '../types';
+import { Effects } from '../game/effects';
+import { createInitialState, GameEngine, type GameOverResult } from '../game/engine';
+import { loadStats, type StatsMap } from '../game/storage';
+import { getSong, SONGS } from '../songs/songs';
+import type { GameState, Song } from '../types';
 
 const LANE_KEYS: Record<string, number> = { KeyD: 0, KeyF: 1, KeyJ: 2, KeyK: 3 };
 
-/** Bridges the imperative engine to React: state updates only on discrete game events. */
+/** Bridges the imperative engine and effects to React: state updates only on discrete game events. */
 export function useGame() {
+  const bgRef = useRef<HTMLCanvasElement>(null);
+  const fxRef = useRef<HTMLCanvasElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
   const boardRef = useRef<HTMLDivElement>(null);
   const layerRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<GameEngine | null>(null);
+  const effectsRef = useRef<Effects | null>(null);
 
-  const [state, setState] = useState<GameState>(() => createInitialState(loadHighScore()));
+  const [state, setState] = useState<GameState>(createInitialState);
   const [lastRun, setLastRun] = useState<GameOverResult | null>(null);
+  const [stats, setStats] = useState<StatsMap>(loadStats);
+  const [selectedId, setSelectedId] = useState(SONGS[0].id);
+
+  // What the theme colours follow: the song being played, or the one highlighted in the menu.
+  const activeSong: Song = getSong(state.status === 'menu' ? selectedId : state.songId) ?? SONGS[0];
 
   useEffect(() => {
+    const bg = bgRef.current;
+    const fx = fxRef.current;
     const layer = layerRef.current;
-    if (!layer) return;
+    if (!bg || !fx || !layer) return;
 
+    const effects = new Effects(bg, fx, stageRef.current);
+    effects.start();
     const engine = new GameEngine({
       layer,
       audio: new AudioEngine(),
+      effects,
       onStateChange: setState,
-      onGameOver: setLastRun,
+      onGameOver: (result) => {
+        setLastRun(result);
+        setStats(loadStats());
+      },
     });
     engineRef.current = engine;
+    effectsRef.current = effects;
 
     const onKeyDown = (e: KeyboardEvent) => {
+      if (e.repeat) return;
+      if (e.code === 'Escape') {
+        if (engine.getState().status !== 'menu') {
+          setLastRun(null);
+          engine.quit();
+        }
+        return;
+      }
       const lane = LANE_KEYS[e.code];
-      if (lane !== undefined && !e.repeat) engine.tap(lane);
+      if (lane !== undefined) engine.press(lane, undefined, `k:${e.code}`);
     };
+    const onKeyUp = (e: KeyboardEvent) => engine.release(`k:${e.code}`);
     window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
 
     return () => {
       window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
       engine.destroy();
+      effects.destroy();
       engineRef.current = null;
+      effectsRef.current = null;
     };
   }, []);
 
-  const start = useCallback(() => {
+  useEffect(() => {
+    effectsRef.current?.setTheme(activeSong.hue, activeSong.hue2);
+  }, [activeSong]);
+
+  const start = useCallback((songId: string) => {
+    const song = getSong(songId);
+    if (!song) return;
+    setSelectedId(songId);
     setLastRun(null);
-    engineRef.current?.start();
+    engineRef.current?.start(song);
   }, []);
 
-  const handlePointerDown = useCallback((e: PointerEvent<HTMLDivElement>) => {
-    const board = boardRef.current;
-    if (!board || e.button !== 0) return;
-    const rect = board.getBoundingClientRect();
+  const quit = useCallback(() => {
+    setLastRun(null);
+    engineRef.current?.quit();
+  }, []);
+
+  const pointerPosition = (e: PointerEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
     const x = (e.clientX - rect.left) / rect.width;
     const y = ((e.clientY - rect.top) / rect.height) * 100;
-    const lane = Math.min(LANES - 1, Math.max(0, Math.floor(x * LANES)));
-    engineRef.current?.tap(lane, y);
+    return { lane: Math.min(LANES - 1, Math.max(0, Math.floor(x * LANES))), y };
+  };
+
+  const handlePointerDown = useCallback((e: PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    // Keep receiving this finger's events even if it slides off the board, so a held tile can be released.
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // Not fatal: some browsers refuse capture for synthetic events.
+    }
+    const { lane, y } = pointerPosition(e);
+    engineRef.current?.press(lane, y, `p${e.pointerId}`);
   }, []);
 
-  return { state, lastRun, boardRef, layerRef, start, handlePointerDown };
+  const handlePointerUp = useCallback((e: PointerEvent<HTMLDivElement>) => {
+    engineRef.current?.release(`p${e.pointerId}`);
+  }, []);
+
+  return {
+    state,
+    lastRun,
+    stats,
+    selectedId,
+    setSelectedId,
+    activeSong,
+    refs: { bgRef, fxRef, stageRef, boardRef, layerRef },
+    start,
+    quit,
+    handlePointerDown,
+    handlePointerUp,
+  };
 }

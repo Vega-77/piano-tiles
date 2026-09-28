@@ -1,5 +1,9 @@
 @import 'tailwindcss';
 
+:root {
+  color-scheme: dark;
+}
+
 html,
 body,
 #root {
@@ -12,4 +16,385 @@ body {
   background-color: #09090b;
   -webkit-tap-highlight-color: transparent;
   -webkit-touch-callout: none;
+}
+
+/* ------------------------------------------------------------------ */
+/* Stage: --hue / --hue2 are set per song and drive every accent.       */
+/* ------------------------------------------------------------------ */
+.stage {
+  --hue: 210;
+  --hue2: 270;
+  box-shadow:
+    0 0 0 1px hsl(0 0% 100% / 0.08),
+    0 0 90px hsl(var(--hue) 100% 55% / 0.22);
+  transition: box-shadow 0.6s;
+}
+
+/* ------------------------------------------------------------------ */
+/* Tiles                                                               */
+/* ------------------------------------------------------------------ */
+@layer components {
+  .tile {
+    position: absolute;
+    top: 0;
+    width: 25%;
+    padding: 3px;
+    pointer-events: none;
+    will-change: transform;
+  }
+  .tile.settle {
+    transition: transform 220ms ease-out;
+  }
+
+  .tile-face {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    overflow: hidden;
+    border-radius: 14px;
+    background: linear-gradient(165deg, hsl(var(--hue) 95% 68%), hsl(var(--hue2) 90% 48%));
+    box-shadow:
+      0 0 18px hsl(var(--hue) 100% 60% / 0.55),
+      inset 0 1px 0 hsl(0 0% 100% / 0.6),
+      inset 0 -14px 24px hsl(var(--hue2) 90% 25% / 0.45);
+    color: white;
+    font-size: 0.95rem;
+    font-weight: 800;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    text-shadow: 0 1px 6px hsl(0 0% 0% / 0.45);
+  }
+
+  /* A soft gloss that sweeps across every tile. */
+  .tile-shine {
+    position: absolute;
+    inset: -50% -20%;
+    background: linear-gradient(115deg, transparent 42%, hsl(0 0% 100% / 0.38) 50%, transparent 58%);
+    transform: translateX(-70%);
+    animation: tile-shine 3.4s ease-in-out infinite;
+  }
+
+  /* The tiles to tap next breathe. */
+  .tile[data-target='true'][data-state='idle'] .tile-face {
+    animation: target-pulse 0.9s ease-in-out infinite;
+  }
+
+  /* Cleared: flash, then fade to a ghost. */
+  .tile[data-state='hit'] .tile-face,
+  .tile[data-state='done'] .tile-face {
+    transform: scale(0.92);
+    opacity: 0.15;
+    filter: saturate(0.1) brightness(1.1);
+    animation: tile-hit 0.4s ease-out;
+  }
+  .tile[data-state='done'] .tile-fill {
+    opacity: 0.35;
+  }
+  .tile[data-state='hit'] .tile-shine,
+  .tile[data-state='done'] .tile-shine {
+    animation: none;
+  }
+
+  .tile[data-state='miss'] .tile-face {
+    background: linear-gradient(165deg, hsl(0 92% 62%), hsl(350 85% 40%));
+    box-shadow:
+      0 0 26px hsl(0 100% 55% / 0.75),
+      inset 0 1px 0 hsl(0 0% 100% / 0.5);
+    animation: miss-blink 0.4s ease-in-out 3;
+  }
+
+  /* Doubles: a glowing bar joins the pair across the lane between them. */
+  .tile-link {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 200%;
+    height: 8px;
+    margin-top: -4px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, hsl(var(--hue) 100% 78% / 0.95), hsl(var(--hue2) 100% 72% / 0.95));
+    box-shadow: 0 0 14px hsl(var(--hue) 100% 65% / 0.85);
+    animation: link-flow 1.4s ease-in-out infinite alternate;
+  }
+  .tile[data-state='hit'] .tile-link,
+  .tile[data-state='done'] .tile-link {
+    opacity: 0.15;
+    animation: none;
+  }
+
+  /* Hold tiles: golden, tall, with a marked head. */
+  .tile[data-kind='hold'] .tile-face {
+    background: linear-gradient(165deg, hsl(50 100% 68%), hsl(24 96% 52%));
+    box-shadow:
+      0 0 20px hsl(40 100% 55% / 0.6),
+      inset 0 1px 0 hsl(0 0% 100% / 0.65),
+      inset 0 -14px 24px hsl(20 90% 30% / 0.4);
+  }
+  .tile[data-kind='hold'][data-state='holding'] .tile-face {
+    animation: hold-glow 0.55s ease-in-out infinite alternate;
+  }
+  .tile[data-kind='hold'][data-state='miss'] .tile-face {
+    background: linear-gradient(165deg, hsl(0 92% 62%), hsl(350 85% 40%));
+  }
+  /* One divider per row, so the length reads at a glance. */
+  .tile-rows {
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+      to bottom,
+      transparent 0,
+      transparent calc(100% / var(--rows) - 2px),
+      hsl(0 0% 100% / 0.4) calc(100% / var(--rows) - 2px),
+      hsl(0 0% 100% / 0.4) calc(100% / var(--rows))
+    );
+  }
+  .tile-head {
+    position: absolute;
+    inset: auto 0 0 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: calc(100% / var(--rows));
+    background: linear-gradient(to top, hsl(0 0% 100% / 0.4), transparent);
+    font-size: 0.8rem;
+  }
+  /* Fills from the bottom as the tile flows past the finger. */
+  .tile-fill {
+    position: absolute;
+    inset: 0;
+    transform: scaleY(0);
+    transform-origin: 50% 100%;
+    background: linear-gradient(to top, hsl(0 0% 100% / 0.95), hsl(50 100% 88% / 0.5));
+  }
+
+  /* The cell where the player tapped wrongly. */
+  .tile-error .tile-face {
+    background: linear-gradient(165deg, hsl(0 92% 62%), hsl(350 85% 40%));
+    box-shadow: 0 0 28px hsl(0 100% 55% / 0.8);
+    font-size: 2rem;
+    letter-spacing: 0;
+    animation: error-shake 0.35s ease-in-out;
+  }
+}
+
+@keyframes tile-shine {
+  0%,
+  60% {
+    transform: translateX(-70%);
+  }
+  100% {
+    transform: translateX(70%);
+  }
+}
+@keyframes target-pulse {
+  0%,
+  100% {
+    filter: brightness(1);
+    transform: scale(1);
+  }
+  50% {
+    filter: brightness(1.3) saturate(1.2);
+    transform: scale(1.03);
+  }
+}
+@keyframes hold-glow {
+  from {
+    filter: brightness(1.05);
+  }
+  to {
+    filter: brightness(1.45) saturate(1.2);
+  }
+}
+@keyframes tile-hit {
+  0% {
+    transform: scale(1.1);
+    filter: brightness(2.6);
+    opacity: 1;
+  }
+}
+@keyframes miss-blink {
+  50% {
+    filter: brightness(1.8);
+  }
+}
+@keyframes link-flow {
+  from {
+    filter: brightness(1);
+  }
+  to {
+    filter: brightness(1.5);
+  }
+}
+@keyframes error-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-7px);
+  }
+  75% {
+    transform: translateX(7px);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* HUD, menu and overlays                                              */
+/* ------------------------------------------------------------------ */
+@keyframes bump {
+  0% {
+    transform: scale(1.4);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes flash {
+  0% {
+    background-color: hsl(var(--hue) 100% 60%);
+    transform: scale(1.25);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.97);
+  }
+}
+@keyframes title-shift {
+  to {
+    background-position: 200% 0;
+  }
+}
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+}
+@keyframes shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+@keyframes cover-scroll {
+  from {
+    transform: translateY(-50%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+.bump {
+  animation: bump 0.22s ease-out;
+}
+.flash {
+  animation: flash 0.7s ease-out;
+}
+.card-in {
+  animation: card-in 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.rise-in {
+  animation: rise-in 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.title-gradient {
+  background: linear-gradient(90deg, hsl(var(--hue) 100% 75%), hsl(var(--hue2) 100% 75%), hsl(var(--hue) 100% 75%));
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: title-shift 6s linear infinite;
+}
+
+.progress-fill {
+  background: linear-gradient(90deg, hsl(var(--hue) 100% 65%), hsl(var(--hue2) 100% 65%));
+  box-shadow: 0 0 10px hsl(var(--hue) 100% 60% / 0.8);
+}
+
+.song-card {
+  background: hsl(0 0% 100% / 0.06);
+  box-shadow: inset 0 0 0 1px hsl(0 0% 100% / 0.1);
+  transition:
+    transform 0.2s,
+    background 0.2s,
+    box-shadow 0.2s;
+}
+.song-card:hover {
+  background: hsl(0 0% 100% / 0.1);
+  transform: translateY(-2px);
+}
+.song-card[aria-pressed='true'] {
+  background: linear-gradient(135deg, hsl(var(--hue) 90% 50% / 0.22), hsl(var(--hue2) 90% 50% / 0.12));
+  box-shadow:
+    inset 0 0 0 2px hsl(var(--hue) 100% 70%),
+    0 0 32px hsl(var(--hue) 100% 60% / 0.35);
+}
+.song-card[aria-pressed='true'] .cover-strip {
+  animation: cover-scroll 6s linear infinite;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, hsl(var(--hue) 95% 62%), hsl(var(--hue2) 90% 55%));
+  box-shadow:
+    0 8px 30px hsl(var(--hue) 100% 55% / 0.45),
+    inset 0 1px 0 hsl(0 0% 100% / 0.5);
+  transition:
+    transform 0.15s,
+    filter 0.15s;
+}
+.btn-primary:hover {
+  filter: brightness(1.12);
+}
+.btn-primary:active {
+  transform: scale(0.96);
+}
+
+.btn-ghost {
+  background: hsl(0 0% 100% / 0.1);
+  box-shadow: inset 0 0 0 1px hsl(0 0% 100% / 0.18);
+  transition:
+    background 0.15s,
+    transform 0.15s;
+}
+.btn-ghost:hover {
+  background: hsl(0 0% 100% / 0.18);
+}
+.btn-ghost:active {
+  transform: scale(0.96);
+}
+
+.badge-new-best {
+  background: linear-gradient(90deg, hsl(45 100% 60%), hsl(30 100% 65%), hsl(45 100% 60%));
+  background-size: 200% 100%;
+  animation: shimmer 2s linear infinite;
+}
+
+/* Slim scrollbar for the song list. */
+.song-list {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(0 0% 100% / 0.25) transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tile-shine,
+  .tile-link,
+  .title-gradient,
+  .badge-new-best,
+  .song-card[aria-pressed='true'] .cover-strip,
+  .tile[data-target='true'][data-state='idle'] .tile-face {
+    animation: none;
+  }
+  .card-in,
+  .rise-in,
+  .bump,
+  .flash {
+    animation: none;
+  }
 }

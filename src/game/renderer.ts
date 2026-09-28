@@ -1,69 +1,127 @@
 import { LANES, TILE_HEIGHT } from '../config';
 import type { Tile } from '../types';
 
-const TILE_CLASS =
-  'absolute top-0 flex h-1/4 w-1/4 items-center justify-center border border-white/30 bg-zinc-950 text-lg font-bold uppercase tracking-[0.3em] text-white will-change-transform';
-const HIT_BG = 'bg-zinc-300';
-const MISS_BG = 'bg-red-500';
-const IDLE_BG = 'bg-zinc-950';
-const SETTLE_CLASSES = ['transition-transform', 'duration-200', 'ease-out'];
+interface TileElements {
+  root: HTMLDivElement;
+  fill: HTMLDivElement | null;
+}
+
+export interface AddOptions {
+  /** Hint text on a tap tile (the first tile says "Tap"). */
+  label?: string;
+  /** Draw a glowing bar from this tile to its partner two lanes over (doubles). */
+  link?: boolean;
+}
+
+function div(className: string): HTMLDivElement {
+  const el = document.createElement('div');
+  el.className = className;
+  return el;
+}
 
 /**
- * Owns the tile DOM nodes. Positions are written straight to `transform`, so the
- * 60fps loop never goes through React. Tile elements are 25% of the layer's height,
- * so translateY(N%) is relative to a tile: yPos% of the board == yPos / 25 * 100%.
+ * Owns the tile DOM nodes. Positions are written straight to `transform`, so the 60fps loop
+ * never goes through React. Looks are all CSS, switched by `data-kind`, `data-state` and
+ * `data-target` on each tile (see index.css).
  */
 export class TileRenderer {
   private readonly layer: HTMLElement;
-  private readonly elements = new Map<string, HTMLDivElement>();
+  private readonly elements = new Map<string, TileElements>();
 
   constructor(layer: HTMLElement) {
     this.layer = layer;
   }
 
-  add(tile: Tile, label = ''): void {
-    const el = document.createElement('div');
-    el.className = TILE_CLASS;
-    el.style.left = `${tile.lane * (100 / LANES)}%`;
-    el.textContent = label;
-    place(el, tile.yPos);
-    this.layer.appendChild(el);
-    this.elements.set(tile.id, el);
+  add(tile: Tile, { label = '', link = false }: AddOptions = {}): void {
+    const root = div('tile');
+    root.dataset.kind = tile.kind;
+    root.dataset.state = 'idle';
+    root.dataset.target = 'false';
+    root.style.left = `${tile.lane * (100 / LANES)}%`;
+    root.style.height = `${tile.rows * TILE_HEIGHT}%`;
+    root.style.setProperty('--rows', String(tile.rows));
+
+    if (link) root.append(div('tile-link'));
+
+    const face = div('tile-face');
+    face.append(div('tile-shine'));
+
+    let fill: HTMLDivElement | null = null;
+    if (tile.kind === 'hold') {
+      face.append(div('tile-rows'));
+      fill = div('tile-fill');
+      face.append(fill);
+      const head = div('tile-head');
+      head.textContent = 'Hold';
+      face.append(head);
+    } else if (label) {
+      const text = document.createElement('span');
+      text.className = 'tile-label';
+      text.textContent = label;
+      face.append(text);
+    }
+
+    root.append(face);
+    this.place(root, tile);
+    this.layer.append(root);
+    this.elements.set(tile.id, { root, fill });
   }
 
   draw(tile: Tile): void {
     const el = this.elements.get(tile.id);
-    if (el) place(el, tile.yPos);
+    if (el) this.place(el.root, tile);
+  }
+
+  /** Highlight the tiles the player should tap next. */
+  setTarget(id: string, isTarget: boolean): void {
+    const root = this.elements.get(id)?.root;
+    const value = String(isTarget);
+    if (root && root.dataset.target !== value) root.dataset.target = value;
   }
 
   markHit(id: string): void {
-    const el = this.elements.get(id);
-    if (!el) return;
-    el.classList.replace(IDLE_BG, HIT_BG);
-    el.textContent = '';
+    this.setState(id, 'hit');
+    this.elements.get(id)?.root.querySelector('.tile-label')?.remove();
+  }
+
+  markHolding(id: string): void {
+    this.setState(id, 'holding');
+  }
+
+  /** 0–1: how much of a held tile has flowed past the finger. */
+  setHoldProgress(id: string, progress: number): void {
+    const fill = this.elements.get(id)?.fill;
+    if (fill) fill.style.transform = `scaleY(${Math.max(0, Math.min(1, progress))})`;
+  }
+
+  markDone(id: string): void {
+    this.setHoldProgress(id, 1);
+    this.setState(id, 'done');
   }
 
   markMiss(id: string): void {
-    this.elements.get(id)?.classList.replace(IDLE_BG, MISS_BG);
+    this.setState(id, 'miss');
   }
 
-  /** Red cell where the player tapped a blank space or the wrong tile. */
+  /** Red cell where the player tapped a blank space or a tile out of order. */
   showError(lane: number, yPos: number): void {
-    const el = document.createElement('div');
-    el.className = `${TILE_CLASS.replace(IDLE_BG, MISS_BG)} text-3xl tracking-normal`;
-    el.style.left = `${lane * (100 / LANES)}%`;
-    el.textContent = '✕';
-    place(el, yPos);
-    this.layer.appendChild(el);
+    const root = div('tile tile-error');
+    root.style.left = `${lane * (100 / LANES)}%`;
+    root.style.height = `${TILE_HEIGHT}%`;
+    root.style.transform = `translate3d(0, ${(yPos / TILE_HEIGHT) * 100}%, 0)`;
+    const face = div('tile-face');
+    face.textContent = '✕';
+    root.append(face);
+    this.layer.append(root);
   }
 
   /** Animate the next draw() instead of snapping (used to reveal a missed tile). */
   enableSettling(): void {
-    for (const el of this.elements.values()) el.classList.add(...SETTLE_CLASSES);
+    for (const { root } of this.elements.values()) root.classList.add('settle');
   }
 
   remove(id: string): void {
-    this.elements.get(id)?.remove();
+    this.elements.get(id)?.root.remove();
     this.elements.delete(id);
   }
 
@@ -71,8 +129,14 @@ export class TileRenderer {
     this.layer.replaceChildren();
     this.elements.clear();
   }
-}
 
-function place(el: HTMLElement, yPos: number): void {
-  el.style.transform = `translate3d(0, ${(yPos / TILE_HEIGHT) * 100}%, 0)`;
+  private setState(id: string, state: string): void {
+    const root = this.elements.get(id)?.root;
+    if (root) root.dataset.state = state;
+  }
+
+  private place(root: HTMLElement, tile: Tile): void {
+    // translateY percentages are relative to the tile's own height (rows * 25% of the board).
+    root.style.transform = `translate3d(0, ${(tile.yPos / (tile.rows * TILE_HEIGHT)) * 100}%, 0)`;
+  }
 }
