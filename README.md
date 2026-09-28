@@ -2,9 +2,11 @@
 
 A mobile-responsive Piano Tiles clone. Tap the black tiles as they fall down four lanes. The game speeds up as you go, and ends if you miss a tile or tap a white one.
 
+**Play online: https://vega-77.github.io/piano-tiles/**
+
 **Stack:** React 19, TypeScript, Vite 8, Tailwind CSS 4, Web Audio API.
 
-## Run it
+## Run it locally
 
 Requires Node.js 20.19+ (or 22.12+).
 
@@ -14,6 +16,10 @@ npm run dev      # dev server at http://localhost:5173
 npm run build    # type-check + production build into dist/
 npm run preview  # serve the production build
 ```
+
+## Deployment
+
+Every push to `main` runs `.github/workflows/deploy.yml`, which builds the site and publishes it to GitHub Pages.
 
 ## How to play
 
