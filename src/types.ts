@@ -3,24 +3,34 @@ export type GameStatus = 'menu' | 'playing' | 'gameover';
 export interface GameState {
   status: GameStatus;
   score: number;
-  /** Starts at 1 and increases by SPEED_STEP every TILES_PER_SPEED_STEP tiles. */
+  /** How much faster tiles fall than on the first lap of the song: LAP_SPEED_FACTOR ** lap. */
   speedMultiplier: number;
   /** Best score for the current song. */
   highScore: number;
   songId: string;
   /** 0–1: how far through the current lap of the song. */
   progress: number;
+  /** Consecutive perfect hits. */
+  combo: number;
+  /** Points multiplier earned by the current chain of perfects. */
+  comboMultiplier: number;
+  /** Completed laps of the song; each one makes the tiles faster. */
+  lap: number;
+  paused: boolean;
 }
 
 export type TileKind = 'tap' | 'hold';
 
-/** Progress of a hold tile: press it, keep holding until its top edge reaches `line`. */
+/** How close to the bar a tile was when tapped. */
+export type Judgment = 'perfect' | 'good' | 'ok';
+
+/** A hold tile is pressed at its head and held until its tail reaches the bar. */
 export interface HoldState {
   phase: 'pending' | 'holding' | 'done';
   /** Which pointer or key is holding it. */
   pointer: string | null;
-  /** Y (percent of board height) the tile's top edge must reach before letting go. */
-  line: number;
+  /** Song time (seconds) when the tail reaches the bar: hold until then. */
+  end: number;
 }
 
 export interface Tile {
@@ -34,10 +44,14 @@ export interface Tile {
   kind: TileKind;
   /** Height in rows: 1 for taps, 2–4 for holds. */
   rows: number;
-  /** Tiles that must be cleared together (a double) share a beat. */
+  /** Index of the beat this tile belongs to, counting across laps. Doubles share one. */
   beat: number;
-  /** Pitch this tile plays, in Hz. */
+  /** Pitch this tile's note plays, in Hz. */
   freq: number;
+  /** Row (counting across laps) whose bottom edge is this tile's head; it is at the bar when the scroll reaches it. */
+  start: number;
+  /** Song time (seconds) when the head reaches the bar: the ideal moment to tap. */
+  time: number;
   hold: HoldState | null;
 }
 
@@ -56,7 +70,7 @@ export interface Song {
   composer: string;
   description: string;
   difficulty: Difficulty;
-  /** Fall speed at 1.0x, in percent of board height per second. */
+  /** Fall speed (and tempo) on the first lap, in percent of board height per second. */
   speed: number;
   /** Theme colours (HSL hues) for tiles and background. */
   hue: number;

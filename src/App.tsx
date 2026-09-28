@@ -2,13 +2,14 @@ import type { CSSProperties } from 'react';
 import { Board } from './components/Board';
 import { GameOverOverlay } from './components/GameOverOverlay';
 import { Hud } from './components/Hud';
+import { PauseOverlay } from './components/PauseOverlay';
 import { SongSelect } from './components/SongSelect';
 import { useGame } from './hooks/useGame';
 import { SONGS } from './songs/songs';
 
 export default function App() {
-  const { state, lastRun, stats, selectedId, setSelectedId, activeSong, refs, start, quit, handlePointerDown, handlePointerUp } =
-    useGame();
+  const game = useGame();
+  const { state, lastRun, stats, selectedId, setSelectedId, activeSong, refs, start, quit, pause, resume } = game;
   const theme = { '--hue': activeSong.hue, '--hue2': activeSong.hue2 } as CSSProperties;
 
   return (
@@ -27,16 +28,20 @@ export default function App() {
             boardRef={refs.boardRef}
             layerRef={refs.layerRef}
             fxRef={refs.fxRef}
-            onPointerDown={handlePointerDown}
-            onPointerUp={handlePointerUp}
+            onPointerDown={game.handlePointerDown}
+            onPointerUp={game.handlePointerUp}
           />
 
           {state.status !== 'menu' && (
             <Hud
               title={activeSong.title}
               score={state.score}
+              combo={state.combo}
+              comboMultiplier={state.comboMultiplier}
+              lap={state.lap}
               speedMultiplier={state.speedMultiplier}
               progress={state.progress}
+              onPause={pause}
             />
           )}
 
@@ -50,12 +55,14 @@ export default function App() {
             />
           )}
 
+          {state.status === 'playing' && state.paused && <PauseOverlay onResume={resume} onQuit={quit} />}
+
           {state.status === 'gameover' && (
             <GameOverOverlay
               song={activeSong}
               score={state.score}
               best={state.highScore}
-              isNewBest={lastRun?.isNewBest ?? false}
+              result={lastRun}
               onRestart={() => start(activeSong.id)}
               onMenu={quit}
             />

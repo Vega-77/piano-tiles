@@ -1,25 +1,39 @@
 import { LANES } from '../config';
+import type { Judgment } from '../types';
+
+/** The timing bar: `y` is its centre; `perfect` and `good` are half-heights of each zone. All percent of board height. */
+export interface BarZone {
+  y: number;
+  perfect: number;
+  good: number;
+}
 
 /** What the engine needs from the visual-effects layer, so tests can swap in a no-op. */
 export interface Fx {
   setTheme(hue: number, hue2: number): void;
   /** 0–1: how intense the background looks (rises as the game speeds up). */
   setEnergy(energy: number): void;
-  /** A tile was cleared at (x, y), both percent of board size. */
-  hit(x: number, y: number, lane: number): void;
-  popup(text: string, x: number, y: number): void;
+  /** Show the timing bar, or hide it with null. */
+  setBar(bar: BarZone | null): void;
+  /** A tile was tapped: its head is at (x, y), both percent of board size. */
+  hit(x: number, y: number, lane: number, judgment: Judgment): void;
+  popup(text: string, x: number, y: number, options?: { sub?: string; judgment?: Judgment }): void;
+  /** Big centred text that fades out, e.g. "Get ready" or "Lap 2". */
+  banner(text: string, sub?: string): void;
   /** Sparks rising from a finger holding a hold tile; call every frame. */
   stream(x: number, y: number): void;
   fail(x: number, y: number): void;
-  /** Flash the background, e.g. on a speed-up. */
+  /** Flash the background, e.g. on a new lap. */
   pulse(strength?: number): void;
 }
 
 export const noopFx: Fx = {
   setTheme() {},
   setEnergy() {},
+  setBar() {},
   hit() {},
   popup() {},
+  banner() {},
   stream() {},
   fail() {},
   pulse() {},
@@ -30,6 +44,9 @@ const TAU = Math.PI * 2;
 const BG_SCALE = 0.5;
 const MAX_PARTICLES = 320;
 const GLYPHS = ['♪', '♫', '♩', '♬'];
+const BANNER_SECONDS = 1.7;
+
+const JUDGMENT_HUE: Record<Judgment, number> = { perfect: 48, good: 160, ok: 215 };
 
 const BLOBS = [
   { sx: 0.11, sy: 0.09, px: 0, py: 1, radius: 0.7, alpha: 0.24, shift: 0 },
@@ -40,7 +57,8 @@ const BLOBS = [
 
 interface Particle { x: number; y: number; vx: number; vy: number; age: number; life: number; size: number; hue: number }
 interface Ripple { x: number; y: number; age: number; hue: number }
-interface Popup { text: string; x: number; y: number; age: number; hue: number }
+interface Popup { text: string; sub: string; x: number; y: number; age: number; hue: number }
+interface Banner { text: string; sub: string; age: number }
 interface Star { x: number; y: number; z: number; phase: number }
 interface Glyph { x: number; y: number; speed: number; sway: number; char: string; size: number; phase: number }
 
@@ -74,11 +92,15 @@ export class Effects implements Fx {
   private pulseLevel = 0;
   private failLevel = 0;
   private shakeLevel = 0;
+  private bar: BarZone | null = null;
   private readonly beams: number[] = new Array<number>(LANES).fill(0);
+  private readonly barFlash: number[] = new Array<number>(LANES).fill(0);
+  private readonly barHue: number[] = new Array<number>(LANES).fill(48);
 
   private particles: Particle[] = [];
   private ripples: Ripple[] = [];
   private popups: Popup[] = [];
+  private banners: Banner[] = [];
   private readonly stars: Star[] = Array.from({ length: 90 }, () => ({
     x: Math.random(), y: Math.random(), z: rand(0.2, 1), phase: rand(0, TAU),
   }));
@@ -121,23 +143,36 @@ export class Effects implements Fx {
     this.targetEnergy = Math.max(0, Math.min(1, energy));
   }
 
+  setBar(bar: BarZone | null): void {
+    this.bar = bar;
+  }
+
   pulse(strength = 0.5): void {
     this.pulseLevel = Math.min(1, this.pulseLevel + strength);
   }
 
-  hit(x: number, y: number, lane: number): void {
+  hit(x: number, y: number, lane: number, judgment: Judgment): void {
     const { width, height } = this.fxSize();
     const px = (x / 100) * width;
     const py = (y / 100) * height;
-    this.burst(px, py, this.hue, this.reducedMotion ? 5 : 16);
-    this.ripples.push({ x: px, y: py, age: 0, hue: this.hue2 });
-    this.beams[lane] = 1;
-    this.pulse(0.35);
+    const hue = judgment === 'good' ? this.hue : JUDGMENT_HUE[judgment];
+    const count = judgment === 'perfect' ? 24 : judgment === 'good' ? 14 : 6;
+    this.burst(px, py, hue, this.reducedMotion ? Math.ceil(count / 3) : count);
+    this.ripples.push({ x: px, y: py, age: 0, hue: judgment === 'perfect' ? 48 : this.hue2 });
+    this.beams[lane] = judgment === 'ok' ? 0.4 : 1;
+    this.barFlash[lane] = 1;
+    this.barHue[lane] = hue;
+    this.pulse(judgment === 'perfect' ? 0.4 : 0.2);
   }
 
-  popup(text: string, x: number, y: number): void {
+  popup(text: string, x: number, y: number, options: { sub?: string; judgment?: Judgment } = {}): void {
     const { width, height } = this.fxSize();
-    this.popups.push({ text, x: (x / 100) * width, y: (y / 100) * height, age: 0, hue: this.hue });
+    const hue = options.judgment === undefined ? this.hue : options.judgment === 'good' ? this.hue : JUDGMENT_HUE[options.judgment];
+    this.popups.push({ text, sub: options.sub ?? '', x: (x / 100) * width, y: (y / 100) * height, age: 0, hue });
+  }
+
+  banner(text: string, sub = ''): void {
+    this.banners.push({ text, sub, age: 0 });
   }
 
   stream(x: number, y: number): void {
@@ -200,7 +235,10 @@ export class Effects implements Fx {
     this.pulseLevel = Math.max(0, this.pulseLevel - dt * 1.8);
     this.failLevel = Math.max(0, this.failLevel - dt * 2.2);
     this.shakeLevel = Math.max(0, this.shakeLevel - dt * 2.6);
-    for (let i = 0; i < this.beams.length; i++) this.beams[i] = Math.max(0, this.beams[i] - dt * 3.2);
+    for (let i = 0; i < this.beams.length; i++) {
+      this.beams[i] = Math.max(0, this.beams[i] - dt * 3.2);
+      this.barFlash[i] = Math.max(0, this.barFlash[i] - dt * 4);
+    }
 
     for (const p of this.particles) {
       p.age += dt;
@@ -212,7 +250,9 @@ export class Effects implements Fx {
     for (const r of this.ripples) r.age += dt;
     this.ripples = this.ripples.filter((r) => r.age < 0.6);
     for (const p of this.popups) p.age += dt;
-    this.popups = this.popups.filter((p) => p.age < 0.8);
+    this.popups = this.popups.filter((p) => p.age < 0.9);
+    for (const b of this.banners) b.age += dt;
+    this.banners = this.banners.filter((b) => b.age < BANNER_SECONDS);
 
     if (this.reducedMotion) return;
     const drift = 1 + this.energy * 4;
@@ -290,6 +330,8 @@ export class Effects implements Fx {
       ctx.fillRect(lane * laneWidth, 0, laneWidth, height);
     });
 
+    this.drawBar(ctx, width, height);
+
     for (const r of this.ripples) {
       const t = r.age / 0.6;
       ctx.strokeStyle = `hsl(${r.hue} 100% 75% / ${1 - t})`;
@@ -315,19 +357,92 @@ export class Effects implements Fx {
 
     ctx.textAlign = 'center';
     for (const p of this.popups) {
-      const t = p.age / 0.8;
+      const t = p.age / 0.9;
       const pop = 1 + Math.max(0, 0.25 - p.age) * 2;
       ctx.save();
-      ctx.translate(p.x, p.y - t * 70);
+      ctx.translate(p.x, p.y - t * 60);
       ctx.scale(pop, pop);
       ctx.globalAlpha = 1 - t * t;
-      ctx.font = '800 22px ui-sans-serif, system-ui, sans-serif';
       ctx.lineWidth = 4;
       ctx.strokeStyle = 'hsl(0 0% 0% / 0.55)';
+      ctx.font = '900 20px ui-sans-serif, system-ui, sans-serif';
       ctx.strokeText(p.text, 0, 0);
-      ctx.fillStyle = `hsl(${p.hue} 100% 92%)`;
+      ctx.fillStyle = `hsl(${p.hue} 100% 82%)`;
       ctx.fillText(p.text, 0, 0);
+      if (p.sub) {
+        ctx.font = '800 14px ui-sans-serif, system-ui, sans-serif';
+        ctx.strokeText(p.sub, 0, 19);
+        ctx.fillStyle = 'hsl(0 0% 100%)';
+        ctx.fillText(p.sub, 0, 19);
+      }
       ctx.restore();
+    }
+
+    for (const b of this.banners) {
+      const t = b.age / BANNER_SECONDS;
+      const pop = 1 + Math.max(0, 0.3 - b.age) * 1.6;
+      ctx.save();
+      ctx.translate(width / 2, height * 0.34);
+      ctx.scale(pop, pop);
+      ctx.globalAlpha = t < 0.65 ? 1 : 1 - (t - 0.65) / 0.35;
+      ctx.lineWidth = 6;
+      ctx.strokeStyle = 'hsl(0 0% 0% / 0.55)';
+      ctx.font = '900 44px ui-sans-serif, system-ui, sans-serif';
+      ctx.strokeText(b.text, 0, 0);
+      ctx.fillStyle = `hsl(${this.hue} 100% 85%)`;
+      ctx.fillText(b.text, 0, 0);
+      if (b.sub) {
+        ctx.font = '700 17px ui-sans-serif, system-ui, sans-serif';
+        ctx.lineWidth = 4;
+        ctx.strokeText(b.sub, 0, 34);
+        ctx.fillStyle = 'hsl(0 0% 100% / 0.95)';
+        ctx.fillText(b.sub, 0, 34);
+      }
+      ctx.restore();
+    }
+  }
+
+  /** The timing bar: a glowing line, a soft band per timing window, and a pad per lane that flashes on a hit. */
+  private drawBar(ctx: CanvasRenderingContext2D, width: number, height: number): void {
+    const bar = this.bar;
+    if (!bar) return;
+    const y = (bar.y / 100) * height;
+    const good = (bar.good / 100) * height;
+    const perfect = (bar.perfect / 100) * height;
+    const laneWidth = width / LANES;
+
+    // "Good" zone: a faint band.
+    ctx.fillStyle = `hsl(${this.hue2} 100% 65% / 0.08)`;
+    ctx.fillRect(0, y - good, width, good * 2);
+
+    // "Perfect" zone: a brighter golden band that fades at its edges.
+    const zone = ctx.createLinearGradient(0, y - perfect, 0, y + perfect);
+    zone.addColorStop(0, 'hsl(48 100% 70% / 0)');
+    zone.addColorStop(0.5, 'hsl(48 100% 70% / 0.3)');
+    zone.addColorStop(1, 'hsl(48 100% 70% / 0)');
+    ctx.fillStyle = zone;
+    ctx.fillRect(0, y - perfect, width, perfect * 2);
+
+    // The line itself, with a wide dim copy underneath for glow.
+    ctx.fillStyle = `hsl(${this.hue} 100% 80% / 0.18)`;
+    ctx.fillRect(0, y - 5, width, 10);
+    ctx.fillStyle = `hsl(${this.hue} 100% 90% / 0.95)`;
+    ctx.fillRect(0, y - 1, width, 2);
+
+    // A pad in every lane that lights up when that lane is hit.
+    for (let lane = 0; lane < LANES; lane++) {
+      const flash = this.barFlash[lane];
+      const cx = lane * laneWidth + laneWidth / 2;
+      const w = laneWidth * 0.78 + flash * 14;
+      const h = 12 + flash * 10;
+      ctx.fillStyle =
+        flash > 0.01
+          ? `hsl(${this.barHue[lane]} 100% 72% / ${0.3 + 0.7 * flash})`
+          : `hsl(${this.hue} 100% 80% / 0.3)`;
+      ctx.beginPath();
+      if (typeof ctx.roundRect === 'function') ctx.roundRect(cx - w / 2, y - h / 2, w, h, h / 2);
+      else ctx.rect(cx - w / 2, y - h / 2, w, h);
+      ctx.fill();
     }
   }
 

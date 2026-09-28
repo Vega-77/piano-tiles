@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'react';
-import type { StatsMap } from '../game/storage';
+import type { SongStats, StatsMap } from '../game/storage';
 import { DIFFICULTY_LABELS, songBpm, songFeatures, songRows, songSeconds } from '../songs/songs';
 import type { Song } from '../types';
 
@@ -100,13 +100,14 @@ function Badge({ children, tone }: { children: string; tone: 'double' | 'hold' }
 interface SongCardProps {
   song: Song;
   index: number;
-  best: number;
-  plays: number;
+  stats: SongStats | undefined;
   selected: boolean;
   onSelect: () => void;
 }
 
-function SongCard({ song, index, best, plays, selected, onSelect }: SongCardProps) {
+function SongCard({ song, index, stats, selected, onSelect }: SongCardProps) {
+  const best = stats?.best ?? 0;
+  const plays = stats?.plays ?? 0;
   const features = songFeatures(song);
   return (
     <button
@@ -143,10 +144,18 @@ function SongCard({ song, index, best, plays, selected, onSelect }: SongCardProp
 
       <div className="flex shrink-0 flex-col items-end text-right">
         <span className="text-[0.6rem] font-bold uppercase tracking-widest text-white/45">Best</span>
-        <span className="text-2xl font-black leading-none tabular-nums">{best}</span>
+        <span className="text-xl font-black leading-none tabular-nums">{best.toLocaleString()}</span>
         <span className="mt-1 text-[0.65rem] text-white/45">
           {plays} {plays === 1 ? 'play' : 'plays'}
         </span>
+        {stats && stats.bestChain > 0 && (
+          <span className="text-[0.65rem] text-white/45">chain {stats.bestChain}</span>
+        )}
+        {stats && stats.bestLaps > 0 && (
+          <span className="text-[0.65rem] text-white/45">
+            {stats.bestLaps} {stats.bestLaps === 1 ? 'lap' : 'laps'}
+          </span>
+        )}
       </div>
     </button>
   );
@@ -176,8 +185,7 @@ export function SongSelect({ songs, stats, selectedId, onSelect, onPlay }: SongS
             <SongCard
               song={song}
               index={index}
-              best={stats[song.id]?.best ?? 0}
-              plays={stats[song.id]?.plays ?? 0}
+              stats={stats[song.id]}
               selected={song.id === selected.id}
               onSelect={() => onSelect(song.id)}
             />
@@ -197,7 +205,7 @@ export function SongSelect({ songs, stats, selectedId, onSelect, onPlay }: SongS
           <span className="truncate">Play {selected.title}</span>
         </button>
         <p className="mt-2 hidden text-center text-xs text-white/40 pointer-fine:block">
-          Keyboard: D · F · J · K &nbsp;·&nbsp; Esc for songs
+          Keyboard: D · F · J · K &nbsp;·&nbsp; Esc to pause
         </p>
       </footer>
     </div>

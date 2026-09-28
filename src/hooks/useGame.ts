@@ -51,22 +51,32 @@ export function useGame() {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.repeat) return;
       if (e.code === 'Escape') {
-        if (engine.getState().status !== 'menu') {
+        const { status, paused } = engine.getState();
+        if (status === 'playing') {
+          if (paused) engine.resume();
+          else engine.pause();
+        } else if (status === 'gameover') {
           setLastRun(null);
           engine.quit();
         }
         return;
       }
       const lane = LANE_KEYS[e.code];
-      if (lane !== undefined) engine.press(lane, undefined, `k:${e.code}`);
+      if (lane !== undefined) engine.press(lane, `k:${e.code}`);
     };
     const onKeyUp = (e: KeyboardEvent) => engine.release(`k:${e.code}`);
+    // The song runs on the audio clock, so freeze it when the player leaves the tab.
+    const onVisibility = () => {
+      if (document.hidden) engine.pause();
+    };
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
+    document.addEventListener('visibilitychange', onVisibility);
 
     return () => {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
+      document.removeEventListener('visibilitychange', onVisibility);
       engine.destroy();
       effects.destroy();
       engineRef.current = null;
@@ -91,12 +101,8 @@ export function useGame() {
     engineRef.current?.quit();
   }, []);
 
-  const pointerPosition = (e: PointerEvent<HTMLDivElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / rect.width;
-    const y = ((e.clientY - rect.top) / rect.height) * 100;
-    return { lane: Math.min(LANES - 1, Math.max(0, Math.floor(x * LANES))), y };
-  };
+  const pause = useCallback(() => engineRef.current?.pause(), []);
+  const resume = useCallback(() => engineRef.current?.resume(), []);
 
   const handlePointerDown = useCallback((e: PointerEvent<HTMLDivElement>) => {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
@@ -106,8 +112,10 @@ export function useGame() {
     } catch {
       // Not fatal: some browsers refuse capture for synthetic events.
     }
-    const { lane, y } = pointerPosition(e);
-    engineRef.current?.press(lane, y, `p${e.pointerId}`);
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    const lane = Math.min(LANES - 1, Math.max(0, Math.floor(x * LANES)));
+    engineRef.current?.press(lane, `p${e.pointerId}`);
   }, []);
 
   const handlePointerUp = useCallback((e: PointerEvent<HTMLDivElement>) => {
@@ -124,6 +132,8 @@ export function useGame() {
     refs: { bgRef, fxRef, stageRef, boardRef, layerRef },
     start,
     quit,
+    pause,
+    resume,
     handlePointerDown,
     handlePointerUp,
   };
