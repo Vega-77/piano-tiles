@@ -1,4 +1,4 @@
-import type { PointerEvent, RefObject } from 'react';
+import { useEffect, type PointerEvent, type RefObject } from 'react';
 import { LANES } from '../config';
 
 interface BoardProps {
@@ -13,12 +13,23 @@ const LANE_INDEXES = Array.from({ length: LANES }, (_, i) => i);
 
 /** Lane dividers, an empty layer the game engine fills with tiles, and the particle canvas on top. */
 export function Board({ boardRef, layerRef, fxRef, onPointerDown, onPointerUp }: BoardProps) {
+  // The fingers on the board are the game's input, so the browser gets no say in them: no zoom, scroll, long-press
+  // menu or text selection may start while two of them are down. (`touch-action` covers most browsers; this the rest.)
+  useEffect(() => {
+    const board = boardRef.current;
+    if (!board) return;
+    const keep = (e: TouchEvent) => e.preventDefault();
+    board.addEventListener('touchstart', keep, { passive: false });
+    return () => board.removeEventListener('touchstart', keep);
+  }, [boardRef]);
+
   return (
     <div
       ref={boardRef}
       onPointerDown={onPointerDown}
       onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
+      // (No onPointerCancel: the browser cancelling a touch is not the player letting go. A hold that loses its finger
+      // that way still runs to its end, or ends when the next tile is tapped, instead of being dropped early.)
       onContextMenu={(e) => e.preventDefault()}
       className="absolute inset-0 touch-none select-none"
     >

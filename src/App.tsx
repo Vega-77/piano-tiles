@@ -4,6 +4,7 @@ import { AccountPanel } from './components/AccountPanel';
 import { GameOverOverlay } from './components/GameOverOverlay';
 import { Hud } from './components/Hud';
 import { ImportPanel } from './components/ImportPanel';
+import { InputLog, wantsInputLog } from './components/InputLog';
 import { Leaderboard } from './components/Leaderboard';
 import { JobStatus } from './components/JobStatus';
 import { PauseOverlay } from './components/PauseOverlay';
@@ -45,6 +46,7 @@ export default function App() {
   // (With no song to follow, the stylesheet's own colours apply.)
   const theme = activeSong ? ({ '--hue': activeSong.hue, '--hue2': activeSong.hue2 } as CSSProperties) : undefined;
   useKeepFileDropsOut();
+  const [inputLog] = useState(wantsInputLog);
 
   // The menu is either for picking a song or, when a song has been chosen to tune, for tuning it.
   // (It stays chosen while that song is played, so quitting the game comes back to the tuning.)
@@ -200,6 +202,7 @@ export default function App() {
           )}
         </div>
       </main>
+      {inputLog && <InputLog />}
     </div>
   );
 }

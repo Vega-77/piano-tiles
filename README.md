@@ -22,13 +22,14 @@ npm run preview  # serve the production build
 
 ## How to play
 
-- **Touch / mouse:** tap in a lane to hit the next tile in that lane. Where you tap in the lane doesn't matter, only when.
+- **Touch / mouse:** tap in a lane to hit the next tile in that lane. Where you tap in the lane doesn't matter, only when. Every finger counts on its own, so doubles and double holds are played with two fingers; a mouse has only one pointer, so use the keyboard (or a touchscreen) for a double hold.
 - **Keyboard:** `D` `F` `J` `K` are lanes 1–4. `Esc` pauses.
 - The board is empty through a four-beat count-in (a big 4-3-2-1, with a tick on each beat) before the first tile arrives, and every later lap starts with a break and another count-in (see below).
 - Tiles come in rhythm, so there are **gaps**: rows with nothing to tap. Wait through them.
 - Tap a lane with no tile in it, leave a tile too long, or tap one far too early, and it's over.
 - The game pauses itself if you switch tabs.
 - **Resuming counts you back in.** After a pause, the music and tiles stay frozen until a four-beat 4-3-2-1 has played out at the tempo you were playing at, ticking on the beat. Taps are ignored while it counts. Pausing again mid-count starts the count over.
+- **Touches not doing what they should?** Add `?input` to the end of the game's address (`…/piano-tiles/?input`). A small readout at the bottom shows every finger that goes down, comes up or is cancelled by the browser, and how many are down, so it can be seen whether the screen is sending what the game expects.
 
 ### The timing bar
 
@@ -68,7 +69,7 @@ Every song opens at a brisk tempo of its own. Each time the song finishes a lap,
 | **Tap** | Tap it as it lines up with the bar. |
 | **Double** | Two tiles in the same row, exactly one lane apart (lanes 1 & 3, or 2 & 4), joined by a glowing bar. Tap both, in either order; each is graded on its own. Common at every level: up to about one tile in eight on Easy, one in five on Medium and more than one in four on Hard. |
 | **Hold** (gold, 2–4 rows tall) | Press as its head lines up with the bar (graded like a tap) and keep holding. It pays out a tick every half row for as long as you hold, worth more the longer it is. **Letting go early never ends the game**: you just stop earning ticks. Tapping the next tile also lets go of the hold. |
-| **Double hold** | Two holds in the same row, one lane apart, joined by the glowing bar at their heads. Press both heads (each is graded on its own) and keep both down; each pays its own ticks, and lifting one finger early only stops that one. Rarer than the other tiles: about a quarter to two-fifths of a song's holds, never two within 16 rows. |
+| **Double hold** | Two holds in the same row, one lane apart, joined by the glowing bar at their heads. Press both heads (each is graded on its own) and keep both down; each pays its own ticks, and lifting one finger early only stops that one (the other is still the one being held, so the next tile can be tapped without ending the run). Rarer than the other tiles: about a quarter to two-fifths of a song's holds, never two within 16 rows. |
 
 Best score, best chain and most laps are saved per song in `localStorage`, and a run's score also goes on the song's [leaderboard](#leaderboards-and-nicknames).
 
@@ -190,6 +191,7 @@ The 60fps loop lives outside React so per-frame movement never triggers a render
 | `src/game/timeline.ts` | The song clock: row arrival times, scroll position, lap speed-ups and the rest and count-in before each lap |
 | `src/game/engine.ts` | Frame loop, beat layout (gaps included), tap/double/hold rules, judgments, chains, laps |
 | `src/game/renderer.ts` | Owns the tile DOM nodes; positions are written straight to `transform` |
+| `src/components/Board.tsx`, `InputLog.tsx` | The board takes every finger as its own pointer (a cancelled touch is not a release, and the browser is kept from starting gestures on it); `InputLog` is the `?input` readout |
 | `src/game/effects.ts` | Canvas visuals: animated backdrop, the timing bar, hit bursts, ripples, popups, banners |
 | `src/game/audio.ts` | Web Audio: plays a song's recording at each lap's speed. It also has a small synth (lead, drums, bass, chords) for a song that has notes instead of a recording, which the tests use |
 | `src/game/storage.ts` | Per-song best score, chain and laps |

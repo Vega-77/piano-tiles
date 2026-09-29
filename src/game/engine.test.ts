@@ -700,8 +700,8 @@ describe('double tiles', () => {
 });
 
 describe('double holds', () => {
-  function setupDoubleHold(rows = 3) {
-    const context = setup([doubleHold(rows), tap(), tap()]);
+  function setupDoubleHold(rows = 3, speed = SPEED) {
+    const context = setup([doubleHold(rows), tap(), tap()], { speed });
     const [left, right] = context.engine.getTiles();
     return { ...context, left, right, spacing: 0.5 / context.rate };
   }
@@ -754,6 +754,24 @@ describe('double holds', () => {
     expect(right.hold?.phase).toBe('done');
     expect(engine.getState().score).toBe(2 * POINTS.perfect + (2 + 5) * HOLD_TICK_POINTS);
     expect(engine.getState().status).toBe('playing');
+  });
+
+  it('let the next tile be tapped when one half was let go of early and the other is still held', () => {
+    const { engine, left, right, t0 } = setupDoubleHold(3, 100);
+    tapAt(engine, left, 0, 'p1');
+    tapAt(engine, right, 0, 'p2');
+    goTo(t0 + 0.3);
+    engine.release('p1');
+    const next = must(engine.getTiles().find((t) => t.beat === 1));
+    next.lane = left.lane + 1; // (the lane between the pair: neither half's own)
+    const at = t0 + 0.55;
+    expect(at).toBeLessThan(must(right.hold).end);
+    expect(next.time - at).toBeLessThanOrEqual(OK_WINDOW);
+    goTo(at);
+    engine.press(next.lane, 'p3');
+    expect(engine.getState().status).toBe('playing');
+    expect(right.hold?.phase).toBe('done'); // let go of to move on, keeping what it had paid
+    expect(next.isHit).toBe(true);
   });
 
   it('are missed if one of the two is never pressed', () => {

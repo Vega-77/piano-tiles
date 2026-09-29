@@ -341,8 +341,13 @@ export class GameEngine {
     // A hold that is still being held doesn't block what comes next: tapping the next tile
     // lets go of the hold (keeping the points it has earned) and counts as that tile's tap.
     // That only applies once the next tile is actually due; a press any earlier than that is
-    // not "moving on", so it falls through and is treated like any other press.
-    if (pending.length > 1 && group.every((t) => t.hold?.phase === 'holding')) {
+    // not "moving on", so it falls through and is treated like any other press. Half of a double
+    // hold that was let go of early is as good as done: the other half is the one still held.
+    if (
+      pending.length > 1 &&
+      group.some((t) => t.hold?.phase === 'holding') &&
+      group.every((t) => t.isHit || t.hold?.phase === 'holding')
+    ) {
       const next = this.tilesOfBeat(pending[1]);
       const due = now >= next[0].time - OK_WINDOW;
       if (due && next.some((t) => t.lane === lane) && next.some((t) => this.reachable(t))) {
