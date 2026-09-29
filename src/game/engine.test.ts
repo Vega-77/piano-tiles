@@ -4,6 +4,7 @@ import {
   COMBO_MAX_MULTIPLIER,
   COMBO_STEP,
   COUNT_IN_BEATS,
+  DOUBLE_HOLD_LATE_WINDOW,
   GOOD_WINDOW,
   HOLD_TICK_POINTS,
   LAP_REST_SECONDS,
@@ -206,6 +207,14 @@ describe('judge and comboMultiplier', () => {
     expect(judge(-(OK_WINDOW - 0.001))).toEqual({ judgment: 'ok', early: true });
     expect(judge(OK_WINDOW + 0.001)).toEqual({ judgment: null, early: false });
     expect(judge(-(OK_WINDOW + 0.001))).toEqual({ judgment: null, early: true });
+  });
+
+  it('gives a tile that allows a longer late tap an OK for it, but no more room early', () => {
+    expect(judge(0.4, 0.5)).toEqual({ judgment: 'ok', early: false });
+    expect(judge(0.501, 0.5)).toEqual({ judgment: null, early: false });
+    expect(judge(-0.3, 0.5)).toEqual({ judgment: null, early: true });
+    expect(judge(0.4, 0.1)).toEqual({ judgment: null, early: false }); // (never less than the usual window)
+    expect(judge(0.2, 0.1)).toEqual({ judgment: 'ok', early: false });
   });
 
   it('adds a multiplier for every COMBO_STEP perfects, up to a cap', () => {
@@ -834,8 +843,45 @@ describe('double holds', () => {
   it('are missed if one of the two is never pressed', () => {
     const { engine, left, t0 } = setupDoubleHold();
     tapAt(engine, left, 0);
-    goTo(t0 + OK_WINDOW + 0.05);
+    goTo(t0 + DOUBLE_HOLD_LATE_WINDOW + 0.05);
     expect(engine.getState().status).toBe('gameover');
+  });
+
+  it('are given longer than any other tile to be grabbed late, since they are the hardest to get to', () => {
+    const { engine, results, left, t0 } = setupDoubleHold();
+    tapAt(engine, left, 0);
+    goTo(t0 + OK_WINDOW + 0.05); // (a single tile would be missed by now)
+    expect(engine.getState().status).toBe('playing');
+    goTo(t0 + DOUBLE_HOLD_LATE_WINDOW - 0.02);
+    expect(engine.getState().status).toBe('playing');
+    goTo(t0 + DOUBLE_HOLD_LATE_WINDOW + 0.02);
+    expect(results[0]).toMatchObject({ reason: 'miss' });
+  });
+
+  it('can be grabbed late with both fingers, and each half then counts as an OK', () => {
+    const { engine, results, left, right, t0 } = setupDoubleHold();
+    goTo(t0 + 0.45);
+    engine.press(left.lane, 'p1');
+    engine.press(right.lane, 'p2');
+    expect(results).toHaveLength(0);
+    expect(engine.getState().score).toBe(2 * POINTS.ok);
+    expect(left.hold?.phase).toBe('holding');
+    expect(right.hold?.phase).toBe('holding');
+  });
+
+  it('are no more forgiving early than any other tile', () => {
+    const { engine, results, left } = setupDoubleHold();
+    goTo(left.time - OK_WINDOW - 0.05);
+    engine.press(left.lane, 'p1');
+    expect(results[0]).toMatchObject({ reason: 'early' });
+  });
+
+  it('are the only tiles with the longer late window', () => {
+    for (const beats of [[double(), tap()], [hold(2), tap()], [tap(), tap()]]) {
+      const { engine, t0 } = setup(beats);
+      goTo(t0 + OK_WINDOW + 0.05);
+      expect(engine.getState().status).toBe('gameover');
+    }
   });
 
   it('end the game when the lane between the pair is tapped', () => {

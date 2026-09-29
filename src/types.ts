@@ -60,6 +60,8 @@ export interface Tile {
   start: number;
   /** Song time (seconds) when the head is centred on the bar: the ideal moment to tap. */
   time: number;
+  /** How many seconds after `time` a tap on this tile still counts (as an OK, or better); later than that it is missed. */
+  lateWindow: number;
   hold: HoldState | null;
 }
 

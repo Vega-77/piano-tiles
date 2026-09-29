@@ -3,6 +3,7 @@ import {
   COMBO_MAX_MULTIPLIER,
   COMBO_STEP,
   COUNT_IN_BEATS,
+  DOUBLE_HOLD_LATE_WINDOW,
   DOUBLE_TAP_GUARD,
   GOOD_WINDOW,
   HOLD_TICK_POINTS,
@@ -110,12 +111,14 @@ export function comboMultiplier(combo: number): number {
 
 /**
  * Grade a tap by how far (seconds) it was from the moment its tile was centred on the bar.
- * Negative = early. Further away than the OK window there is no grade: the tap doesn't line up.
+ * Negative = early. Further away than the OK window there is no grade: the tap doesn't line up. A tile that allows
+ * a late tap more time than that (`lateWindow`, seconds) grades one that late as OK.
  */
-export function judge(delta: number): { judgment: Judgment | null; early: boolean } {
+export function judge(delta: number, lateWindow = OK_WINDOW): { judgment: Judgment | null; early: boolean } {
   const distance = Math.abs(delta);
+  const okWindow = delta > 0 ? Math.max(OK_WINDOW, lateWindow) : OK_WINDOW;
   const judgment =
-    distance <= PERFECT_WINDOW ? 'perfect' : distance <= GOOD_WINDOW ? 'good' : distance <= OK_WINDOW ? 'ok' : null;
+    distance <= PERFECT_WINDOW ? 'perfect' : distance <= GOOD_WINDOW ? 'good' : distance <= okWindow ? 'ok' : null;
   return { judgment, early: delta < 0 };
 }
 
@@ -397,7 +400,7 @@ export class GameEngine {
     }
 
     const delta = now - tile.time;
-    const { judgment, early } = judge(delta);
+    const { judgment, early } = judge(delta, tile.lateWindow);
     const heard = age > 0.004 ? `, heard ${Math.round(age * 1000)}ms late` : '';
     if (!judgment) {
       trace(() => `tap L${lane}: ${signedMs(delta)} is too ${delta < 0 ? 'early' : 'late'}${heard}: game over`);
@@ -485,7 +488,7 @@ export class GameEngine {
     const beat = this.targetBeat();
     this.announceDue(beat, now);
     const missed = this.tiles.filter(
-      (t) => t.beat === beat && !t.isHit && t.hold?.phase !== 'holding' && now - t.time > OK_WINDOW,
+      (t) => t.beat === beat && !t.isHit && t.hold?.phase !== 'holding' && now - t.time > t.lateWindow,
     );
     if (missed.length > 0) {
       trace(() => `missed L${missed.map((t) => t.lane).join(' and L')}: nothing tapped in time, game over`);
@@ -845,8 +848,9 @@ export class GameEngine {
       const held = spec.type === 'doublehold';
       const rows = held ? spec.rows : 1;
       const end = held ? time + (rows - 0.5) / timeline.rate(lap) : time;
+      const lateWindow = held ? DOUBLE_HOLD_LATE_WINDOW : OK_WINDOW;
       lanes.forEach((lane, i) =>
-        this.addTile({ beat, lane, rows, kind: held ? 'hold' : 'tap', freq: spec.freqs[i], start, time, end }, i === 0),
+        this.addTile({ beat, lane, rows, kind: held ? 'hold' : 'tap', freq: spec.freqs[i], start, time, end, lateWindow }, i === 0),
       );
       return true;
     }
@@ -854,12 +858,12 @@ export class GameEngine {
     // A hold is complete when its far end reaches the bar: half a row less than its length.
     const end = time + (rows - 0.5) / timeline.rate(lap);
     const lane = Math.floor(Math.random() * LANES);
-    this.addTile({ beat, lane, rows, kind: spec.type, freq: spec.freq, start, time, end });
+    this.addTile({ beat, lane, rows, kind: spec.type, freq: spec.freq, start, time, end, lateWindow: OK_WINDOW });
     return true;
   }
 
   private addTile(
-    spec: Pick<Tile, 'beat' | 'lane' | 'rows' | 'kind' | 'freq' | 'start' | 'time'> & { end: number },
+    spec: Pick<Tile, 'beat' | 'lane' | 'rows' | 'kind' | 'freq' | 'start' | 'time' | 'lateWindow'> & { end: number },
     link = false,
   ): void {
     const tile: Tile = {
@@ -873,6 +877,7 @@ export class GameEngine {
       freq: spec.freq,
       start: spec.start,
       time: spec.time,
+      lateWindow: spec.lateWindow,
       hold:
         spec.kind === 'hold'
           ? { phase: 'pending', pointer: null, end: spec.end, totalTicks: spec.rows * 2 - 1, ticks: 0, earned: 0 }

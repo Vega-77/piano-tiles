@@ -32,6 +32,11 @@ export const GOOD_WINDOW = 0.18;
  * doesn't line up with the bar: the game ends. Leave a tile later than this and it's missed.
  */
 export const OK_WINDOW = 0.25;
+/**
+ * A double hold takes two fingers down at once, and it is the tile that players find hardest to get to in time, so
+ * both halves may be grabbed this much later than the bar (still as an OK). Early, they are as strict as any tile.
+ */
+export const DOUBLE_HOLD_LATE_WINDOW = 0.5;
 
 /** Base points per tile for each judgment, before the chain multiplier. */
 export const POINTS = { perfect: 100, good: 60, ok: 25 } as const;

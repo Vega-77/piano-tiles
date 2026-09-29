@@ -42,6 +42,8 @@ The glowing bar is where the **middle of each tile** should be when you tap it. 
 | **OK** (within 250 ms), early or late | 25 |
 | **Further off than that** | The tile doesn't line up with the bar: **game over** |
 
+**Double holds get longer to be grabbed late.** They are the hardest tile to get two fingers onto, so both halves may still be grabbed up to 500 ms after the bar (as an OK); every other tile is missed after 250 ms. Early, a double hold is as strict as any tile.
+
 A Good or OK hit also shows a coloured tag under its name, **blue EARLY** or **orange LATE**, so you can tell which way you missed; a perfect hit has none.
 
 Timing is measured in seconds, not pixels, so the windows stay fair however fast the tiles fall. The bar's zones grow as the tiles speed up so they always show what the windows actually are. Tapping before the next tile has scrolled into view is simply ignored. A tap is graded at the moment the finger (or key) landed, not the moment the page got round to hearing of it, so a slow frame doesn't make a tap late. The game over screen says how many milliseconds early or late the tap was that ended the run.
