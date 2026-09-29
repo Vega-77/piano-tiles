@@ -33,6 +33,11 @@ export interface ChartFile {
    * so a lap is a whole number of bars. Missing means the whole audio is played.
    */
   end?: number;
+  /**
+   * When the song was last changed, in milliseconds since 1970. When songs are synced between
+   * devices the copy with the later time wins. Missing on a song saved before syncing existed.
+   */
+  savedAt?: number;
   difficulty: Difficulty;
   hue: number;
   hue2: number;
@@ -208,6 +213,7 @@ export function validateChart(raw: unknown): ChartFile {
     if (chart.end > chart.duration + 0.05) fail('"end" is past the end of the audio');
     if (chart.end <= chart.offset) fail('"end" must be after "offset"');
   }
+  if (c.savedAt !== undefined) chart.savedAt = numberField(c.savedAt, 'savedAt', 0, Number.MAX_SAFE_INTEGER);
   if (typeof c.analysis === 'object' && c.analysis !== null) chart.analysis = c.analysis as ChartAnalysis;
   return chart;
 }

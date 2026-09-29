@@ -37,6 +37,8 @@ interface TuneScreenProps {
   /** A song added on this device. Key the screen on it, so its fields start again for another song. */
   song: Song;
   busy: boolean;
+  /** Whether someone is signed in, so the song is kept in their cloud and removing it removes it there too. */
+  synced?: boolean;
   /** Progress, or what went wrong, for what is being done to the song. */
   status?: ReactNode;
   onTune: (id: string, options: TuneOptions) => Promise<ChartFile | undefined>;
@@ -69,7 +71,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
  * tiles, give it a tempo by hand, ask for more or fewer tiles, take it to another device, or take
  * it out. A screen of its own, so it is clear whether you are picking a song or tuning one.
  */
-export function TuneScreen({ song, busy, status, onTune, onRechart, onSave, onRemove, onPlay, onBack }: TuneScreenProps) {
+export function TuneScreen({ song, busy, synced = false, status, onTune, onRechart, onSave, onRemove, onPlay, onBack }: TuneScreenProps) {
   const info = song.imported;
   const savedNudge = Math.round((info?.nudge ?? 0) * 1000);
   const savedLevel = info?.level ?? 'medium';
@@ -298,8 +300,9 @@ export function TuneScreen({ song, busy, status, onTune, onRechart, onSave, onRe
 
         <Section title="On another device">
           <p className="leading-snug text-white/55">
-            This song lives in this browser only. Save it as a file, then choose that file with “Add your own song” on the other
-            device.
+            {synced
+              ? 'This song is kept in your account, so it turns up on your other devices once you sign in there. A song file is a backup, or a way to move it without signing in.'
+              : 'This song lives in this browser only. Sign in on the song list to sync it, or save it as a file and choose that file with “Add your own song” on the other device.'}
           </p>
           <button type="button" className={small} disabled={busy} onClick={() => onSave(song.id)}>
             Save song file
@@ -309,7 +312,11 @@ export function TuneScreen({ song, busy, status, onTune, onRechart, onSave, onRe
         <Section title="Remove">
           {confirming ? (
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-white/80">Delete this song and its audio from this device?</span>
+              <span className="text-white/80">
+                {synced
+                  ? 'Delete this song and its audio from this device and from your account, so it goes from your other devices too?'
+                  : 'Delete this song and its audio from this device?'}
+              </span>
               <button
                 type="button"
                 disabled={busy}

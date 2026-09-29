@@ -181,6 +181,8 @@ interface SongSelectProps {
   problems?: readonly string[];
   /** Given a file dropped on the menu; leave out to turn dropping off. */
   onDropFile?: (file: File) => void;
+  /** Under the title: signing in to sync the songs to other devices. */
+  cloud?: ReactNode;
   /** Below the songs: the way to add one. */
   adder?: ReactNode;
   /** Above the Play button: progress or the result of adding a song. */
@@ -202,6 +204,7 @@ export function SongSelect({
   loadError = null,
   problems = [],
   onDropFile,
+  cloud,
   adder,
   status,
   onTune,
@@ -255,6 +258,7 @@ export function SongSelect({
         <p className="mt-1 text-sm text-white/60">
           {songs.length > 0 ? 'Choose a song' : ready ? 'Add your first song' : ' '}
         </p>
+        {cloud}
       </header>
 
       <ul ref={list} className="song-list flex-1 space-y-3 overflow-y-auto px-4 pb-4">

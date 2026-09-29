@@ -34,16 +34,17 @@ function saveToDevice(blob: Blob, filename: string) {
 
 /**
  * Adding, tuning, exporting and removing songs, one job at a time, all inside this browser.
- * `refresh` reads the library again once a job has changed it.
+ * `refresh` reads the library again once a job has changed it, and `changed` (if given) is told
+ * so the songs can be synced.
  */
-export function useImporter(refresh: () => Promise<void>) {
+export function useImporter(refresh: () => Promise<void>, changed?: () => void) {
   const [working, setWorking] = useState<Working | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [added, setAdded] = useState<ChartFile | null>(null);
   const running = useRef<AbortController | null>(null);
 
   const run = useCallback(
-    async <T>(what: string, task: (job: Job) => Promise<T>): Promise<T | undefined> => {
+    async <T>(what: string, task: (job: Job) => Promise<T>, changesSongs = true): Promise<T | undefined> => {
       if (running.current) return undefined;
       const controller = new AbortController();
       running.current = controller;
@@ -55,6 +56,7 @@ export function useImporter(refresh: () => Promise<void>) {
           onStage: (stage) => setWorking({ what, stage: stage.message, fraction: stage.fraction }),
         });
         await refresh();
+        if (changesSongs) changed?.();
         return result;
       } catch (failure) {
         if (!(failure instanceof Cancelled)) {
@@ -66,7 +68,7 @@ export function useImporter(refresh: () => Promise<void>) {
         setWorking(null);
       }
     },
-    [refresh],
+    [refresh, changed],
   );
 
   /**
@@ -106,7 +108,7 @@ export function useImporter(refresh: () => Promise<void>) {
   /** Saves the song, its audio and its tuning as one file, to be added on another device. */
   const save = useCallback(
     async (id: string) => {
-      const file = await run('Saving the song file', async () => exportSong(id));
+      const file = await run('Saving the song file', async () => exportSong(id), false);
       if (file) saveToDevice(file.blob, file.filename);
     },
     [run],

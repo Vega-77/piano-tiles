@@ -88,6 +88,20 @@ A song (its chart and its audio) is saved in that browser's own storage (Indexed
 
 Clearing a site's data removes its songs, and a private window forgets them when it closes (the game says so when the browser won't keep them). Save the song files of anything you would miss.
 
+### Syncing songs between devices (optional)
+
+**Sign in with Google** at the top of the song list and your songs follow you: what you add, tune or remove on one device turns up on the others once they are signed in too. Nobody has to sign in to play; without it everything works as described above, on that device alone. The device's own copy (IndexedDB) is always the one the game plays from, so it works offline, and the `.pianotiles` file stays as a backup.
+
+It runs on Firebase's **free Spark plan**, using only **Authentication (Google)** and **Firestore**. There is no Cloud Storage (it needs a card), no Analytics, and nothing to pay. Firebase itself is only downloaded once someone signs in.
+
+- **What is stored:** under `users/<your uid>/songs/<song id>` there is one document per song (its chart and where its audio is), and its audio in pieces of 900 KB in a `parts` collection beside it, because a document can be at most 1 MiB. The rules in [`firestore.rules`](firestore.rules) let a signed-in account reach only what is under its own uid.
+- **Which copy wins:** every change stamps the song with the time (`savedAt`). When the two sides differ, the newer copy wins, and equal times mean the same song. A song from before syncing counts as oldest and is stamped the first time it is sent.
+- **Removing a song** leaves a small note in the cloud (its audio is deleted, the note stays), so the other devices know it was removed rather than never there. A song changed after it was removed elsewhere comes back.
+- **When it syncs:** at sign-in, a moment after each change, when the connection comes back, and when you return to the page after a minute or more. **Sync now** does it on request.
+- **Limits:** the free plan holds 1 GiB and allows 50,000 reads and 20,000 writes a day. A song's audio bigger than 40 MB isn't sent (the song stays on that device, the song list says so, and the song file still moves it). The game says so if the free daily limit runs out.
+
+**Setting it up (once, in the Firebase console):** the web config is public and lives in `src/cloud/config.ts` (it is not a secret; the rules are what protect the data). In the console for that project: turn on **Google** under Authentication → Sign-in method; add the site's domain (for this site, `vega-77.github.io`) under Authentication → Settings → Authorized domains; create a Firestore database (production mode); and publish the contents of `firestore.rules` under Firestore → Rules. To stop other people who sign in from using up your free quota, use the second rule in that file, with your own uid from Authentication → Users (keep it in the console; don't commit it).
+
 ### How the tiles are placed
 
 The analyser finds the tempo and where the first beat falls, then puts the tiles on a fixed grid from there. It looks for sudden jumps in the sound (it doesn't tell instruments apart) and puts a tile on the strongest hits that fall on the grid, keeping a gap between tiles and leaving rests where the music is quiet.
@@ -112,7 +126,7 @@ Every added song has a **Tune** screen of its own, opened with **Tune this song*
 | **Short / Medium / Long** + **Re-chart** | The lap is too short or too long. Each is a range (60–70 s, 70–80 s, 80–90 s); a longer song is stopped at the best bar line inside it (see [Where a long song stops](#how-the-tiles-are-placed)). The screen says where this song would stop. Songs added before lengths existed play in full until re-charted. |
 | **Name** + **Save** | To rename it. |
 | **Save song file** | To take the song to another device, or keep a backup. |
-| **Remove song…** | To take it out of this device (asks first). |
+| **Remove song…** | To take it out of this device (asks first). When signed in, it goes from your account and your other devices too. |
 
 Changes are saved on this device straight away.
 
@@ -145,7 +159,9 @@ The 60fps loop lives outside React so per-frame movement never triggers a render
 | `src/songs/` | Note-notation parser and the arrangement builder (used by the synth path and the tests), and `songs.ts`, the numbers the screens show about a song |
 | `src/songs/analysis/` | The in-browser analyser for added songs: spectral onsets, tempo and beat grid, tile placement (`analyze.ts` and friends), where a long song stops (`length.ts`), run in a worker (`analyzer.worker.ts`, `client.ts`) |
 | `src/songs/` (added songs) | `decode.ts` reads a file's audio, `importer.ts` adds / re-charts / tunes / removes a song, `store.ts` keeps songs in IndexedDB, `bundle.ts` is the `.pianotiles` song file, `chart.ts` and `library.ts` turn stored charts into playable songs |
-| `src/components/` | The screens and overlays: song list (`SongSelect`, `ImportPanel`, `JobStatus`), the separate `TuneScreen`, the HUD, pause and game over |
+| `src/cloud/` | Syncing: `sync.ts` plans (`planSync`, pure) and runs (`runSync`) a sync of this device against the cloud; `firestore.ts` is the account's songs in Firestore (audio cut into pieces); `firebase.ts` loads the SDK on demand and signs in; `removals.ts` remembers what was removed here; `errors.ts` words for what can go wrong; `config.ts` the public Firebase config |
+| `src/hooks/useCloud.ts` | Sign-in state and when to sync (sign-in, changes, coming back online or to the page) |
+| `src/components/` | The screens and overlays: song list (`SongSelect`, `CloudPanel`, `ImportPanel`, `JobStatus`), the separate `TuneScreen`, the HUD, pause and game over |
 | `src/hooks/useGame.ts` | Bridges the engine to React; state updates only on start, each score, each lap, pause and game over |
 | `src/index.css` | Tile looks and animations, switched by `data-kind` / `data-state` attributes |
 | `src/config.ts` | Tunables: timing windows, points, chain steps, lap speed step |

@@ -9,6 +9,8 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   // The song analyser runs in a module worker (see src/songs/analysis/client.ts).
   worker: { format: 'es' },
+  // (The one chunk over the default limit is Firestore, which is only loaded once someone signs in.)
+  build: { chunkSizeWarningLimit: 600 },
   test: {
     environment: 'happy-dom',
     include: ['src/**/*.test.ts'],

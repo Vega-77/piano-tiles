@@ -4,6 +4,7 @@ import { DEFAULT_LENGTH, lengthFrom, type Length } from './analysis/length';
 import { DEFAULT_DENSITY, densityFrom, type Density } from './analysis/tiles';
 import { isSongFile, packSong, songFileName, unpackSong } from './bundle';
 import { MAX_NUDGE, validateChart, type ChartFile } from './chart';
+import { removalLog, type RemovalLog } from '../cloud/removals';
 import { MAX_UPLOAD_MB, audioToKeep, browserDecoder, decodeToSamples, type Decoder, type StoredAudio } from './decode';
 import { Cancelled, ImportError } from './errors';
 import { MISSING_AUDIO, getSongStore, keepSongs, type SongStore } from './store';
@@ -11,7 +12,9 @@ import { MISSING_AUDIO, getSongStore, keepSongs, type SongStore } from './store'
 /**
  * Adding, changing and removing the songs a player brings. The whole job happens in this browser:
  * the file is decoded here, the beat is found by a worker here (analysis/), and the chart and audio
- * are saved here (store.ts). Nothing is uploaded, and nothing needs installing.
+ * are saved here (store.ts). Nothing leaves the device from here; a player who has signed in has
+ * their songs copied to their own cloud afterwards (see cloud/sync.ts), which only needs to know
+ * when each was last changed (`savedAt`) and which were removed.
  */
 
 export { LENGTHS, LENGTH_SECONDS, type Length } from './analysis/length';
@@ -61,13 +64,19 @@ export interface Tools {
   store(): Promise<SongStore>;
   decoder: Decoder;
   analyse: Analyser;
+  /** Where a removal is noted, for syncing; leave out to note nothing. */
+  removals?: RemovalLog;
 }
 
 export const defaultTools: Tools = {
   store: getSongStore,
   decoder: browserDecoder,
   analyse: analyzeSamples,
+  removals: removalLog,
 };
+
+/** The time a song is saved under: now, but always later than the time it had, so a change is never mistaken for an older copy. */
+const stamp = (before?: number) => Math.max(Date.now(), (before ?? 0) + 1);
 
 const MIN_BPM = 40;
 const MAX_BPM = 300;
@@ -189,6 +198,7 @@ export async function addSong(file: File, options: ImportOptions = {}, job: Job 
     title,
     artist: options.artist?.trim().slice(0, MAX_TEXT) || 'Imported',
     audio: `audio-${fingerprint.toString(16).padStart(8, '0')}.${audio.ext}`,
+    savedAt: stamp(),
     hue,
     hue2: (hue + 55) % 360,
     ...measured,
@@ -225,7 +235,7 @@ export async function rechartSong(id: string, options: RechartOptions = {}, job:
   stage('Saving the song', 0.97);
   const title = options.title?.trim().slice(0, MAX_TEXT) || old.title;
   // (Its name, colours, audio and hand-set nudge stay as they were.)
-  const chart = checked({ ...old, title, ...measured });
+  const chart = checked({ ...old, title, ...measured, savedAt: stamp(old.savedAt) });
   await store.save(chart);
   stage('Done', 1);
   return chart;
@@ -250,13 +260,18 @@ export async function tuneSong(id: string, options: TuneOptions, _job: Job = {},
     if (options.nudgeMs === 0) delete chart.nudge;
     else chart.nudge = Math.round(options.nudgeMs * 10) / 10000;
   }
+  chart.savedAt = stamp(chart.savedAt);
   await store.save(checked(chart));
   return chart;
 }
 
 /** Deletes a saved song and its audio. */
 export async function removeSong(id: string, _job: Job = {}, tools: Tools = defaultTools): Promise<void> {
-  await (await tools.store()).remove(id);
+  const store = await tools.store();
+  const before = (await store.chart(id)) as { savedAt?: unknown } | undefined;
+  await store.remove(id);
+  // (Noted as later than the song's last change, so syncing takes it as the newer of the two. A song that was never here is nothing to note.)
+  if (before) tools.removals?.add(id, stamp(typeof before.savedAt === 'number' ? before.savedAt : undefined));
 }
 
 /** A song as a file to keep or move to another device: its chart and audio together. */
@@ -276,12 +291,24 @@ async function addSongFile(file: File, job: Job, tools: Tools): Promise<ChartFil
   notCancelled(job);
 
   const store = await tools.store();
-  const saved = (await store.charts()).find((raw) => (raw as { id?: unknown } | null)?.id === chart.id) as { audio?: unknown } | undefined;
+  const saved = (await store.charts()).find((raw) => (raw as { id?: unknown } | null)?.id === chart.id) as
+    | { audio?: unknown; savedAt?: unknown }
+    | undefined;
   let id = chart.id;
   if (saved?.audio !== chart.audio) id = uniqueId(id, await takenIds(store));
 
   stage('Saving the song', 0.7);
-  const added = { ...chart, id };
+  // A file replacing the song here is a change made now, so it wins over the older copy in the cloud.
+  // A song this device doesn't have keeps the time in its file, unless it was removed here since:
+  // then it counts as added after the removal, or the sync would take it out again.
+  const replaces = saved?.audio === chart.audio;
+  const removedAt = tools.removals?.all().get(id);
+  const savedAt = replaces
+    ? stamp(typeof saved.savedAt === 'number' ? saved.savedAt : undefined)
+    : chart.savedAt !== undefined && chart.savedAt > (removedAt ?? 0)
+      ? chart.savedAt
+      : stamp(removedAt);
+  const added = { ...chart, id, savedAt };
   await store.save(added, audio);
   void keepSongs();
   stage('Done', 1);

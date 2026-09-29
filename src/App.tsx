@@ -7,6 +7,8 @@ import { JobStatus } from './components/JobStatus';
 import { PauseOverlay } from './components/PauseOverlay';
 import { SongSelect } from './components/SongSelect';
 import { TuneScreen } from './components/TuneScreen';
+import { CloudPanel } from './components/CloudPanel';
+import { useCloud } from './hooks/useCloud';
 import { useGame } from './hooks/useGame';
 import { useImporter } from './hooks/useImporter';
 import { useLibrary } from './hooks/useLibrary';
@@ -30,7 +32,9 @@ function useKeepFileDropsOut() {
 export default function App() {
   const library = useLibrary();
   const game = useGame(library.songs);
-  const importer = useImporter(library.refresh);
+  const cloud = useCloud({ refresh: library.refresh });
+  const importer = useImporter(library.refresh, cloud.syncSoon);
+  const synced = cloud.account !== null;
   const { state, lastRun, stats, selectedId, setSelectedId, activeSong, refs, start, quit, pause, resume } = game;
   // (With no song to follow, the stylesheet's own colours apply.)
   const theme = activeSong ? ({ '--hue': activeSong.hue, '--hue2': activeSong.hue2 } as CSSProperties) : undefined;
@@ -73,6 +77,7 @@ export default function App() {
       error={importer.error}
       added={importer.added}
       persistent={library.persistent}
+      synced={synced}
       onCancel={importer.cancel}
       onDismiss={dismiss}
       onTune={onTune}
@@ -117,6 +122,7 @@ export default function App() {
               key={tuning.id}
               song={tuning}
               busy={working !== null}
+              synced={synced}
               status={jobStatus()}
               onTune={importer.tune}
               onRechart={importer.rechart}
@@ -139,7 +145,8 @@ export default function App() {
               loadError={game.loadError}
               problems={library.problems}
               onDropFile={addSong}
-              adder={<ImportPanel busy={working !== null} persistent={library.persistent} onFile={addSong} />}
+              cloud={<CloudPanel cloud={cloud} />}
+              adder={<ImportPanel busy={working !== null} persistent={library.persistent} synced={synced} onFile={addSong} />}
               status={jobStatus(tune)}
               onTune={(song) => tune(song.id)}
             />
