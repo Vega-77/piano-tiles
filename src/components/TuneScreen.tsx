@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { MAX_NUDGE, type ChartFile } from '../songs/chart';
 import { DENSITIES, LENGTHS, LENGTH_SECONDS, type Density, type Length, type RechartOptions, type TuneOptions } from '../songs/importer';
 import { DIFFICULTY_LABELS } from '../songs/songs';
-import type { Song } from '../types';
+import type { Publication, Song } from '../types';
 
 const DENSITY_LABELS: Record<Density, string> = { easy: 'Easy', medium: 'Medium', hard: 'Hard' };
 const DENSITY_HINTS: Record<Density, string> = {
@@ -12,6 +12,13 @@ const DENSITY_HINTS: Record<Density, string> = {
 };
 
 const LENGTH_LABELS: Record<Length, string> = { short: 'Short', medium: 'Medium', long: 'Long' };
+
+const PUBLISH_HINTS: Record<Publication, string> = {
+  draft: 'This song is a draft, only on this device. Publishing adds it, with this chart and its audio, for everyone to play and to put scores on. A song has one chart, so tune it first.',
+  changed:
+    'Everyone else still plays the version you published. Update it to give them this one. Scores already on the leaderboard stay, even though the tiles are new.',
+  live: 'Published: everyone plays this chart. To change it, tune or re-chart it here and then update it. Changing the chart leaves the scores already on the leaderboard as they are.',
+};
 
 const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.round(seconds % 60)).padStart(2, '0')}`;
 
@@ -37,14 +44,16 @@ interface TuneScreenProps {
   /** A song added on this device. Key the screen on it, so its fields start again for another song. */
   song: Song;
   busy: boolean;
-  /** Whether someone is signed in, so the song is kept in their cloud and removing it removes it there too. */
-  synced?: boolean;
   /** Progress, or what went wrong, for what is being done to the song. */
   status?: ReactNode;
   onTune: (id: string, options: TuneOptions) => Promise<ChartFile | undefined>;
   onRechart: (id: string, options: RechartOptions) => Promise<ChartFile | undefined>;
   /** Saves the song, audio included, as a file that can be added on another device. */
   onSave: (id: string) => void;
+  /** Puts the song, with its chart, in the songs everyone plays; or brings the published one up to date. */
+  onPublish: (id: string) => void;
+  /** Takes the song down for everyone (it stays here as a draft). */
+  onUnpublish: (id: string) => void;
   onRemove: (id: string) => void;
   /** Plays the song, to hear whether the change helped. */
   onPlay: (id: string) => void;
@@ -71,7 +80,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
  * tiles, give it a tempo by hand, ask for more or fewer tiles, take it to another device, or take
  * it out. A screen of its own, so it is clear whether you are picking a song or tuning one.
  */
-export function TuneScreen({ song, busy, synced = false, status, onTune, onRechart, onSave, onRemove, onPlay, onBack }: TuneScreenProps) {
+export function TuneScreen({ song, busy, status, onTune, onRechart, onSave, onPublish, onUnpublish, onRemove, onPlay, onBack }: TuneScreenProps) {
   const info = song.imported;
   const savedNudge = Math.round((info?.nudge ?? 0) * 1000);
   const savedLevel = info?.level ?? 'medium';
@@ -84,6 +93,7 @@ export function TuneScreen({ song, busy, synced = false, status, onTune, onRecha
   const [level, setLevel] = useState<Density>(savedLevel);
   const [length, setLength] = useState<Length>(savedLength);
   const [confirming, setConfirming] = useState(false);
+  const [takingDown, setTakingDown] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
   // What is saved changed (a save or a re-chart came back): start the fields from it again.
@@ -97,6 +107,7 @@ export function TuneScreen({ song, busy, synced = false, status, onTune, onRecha
     setLevel(savedLevel);
     setLength(savedLength);
     setConfirming(false);
+    setTakingDown(false);
   }
 
   useEffect(() => {
@@ -115,6 +126,7 @@ export function TuneScreen({ song, busy, synced = false, status, onTune, onRecha
 
   if (!info) return null;
 
+  const publication = info.publication;
   const trimmed = title.trim();
   const bpmValue = Number(bpm);
   const bpmOk = bpm.trim() !== '' && Number.isFinite(bpmValue) && bpmValue >= 40 && bpmValue <= 300;
@@ -298,11 +310,46 @@ export function TuneScreen({ song, busy, synced = false, status, onTune, onRecha
           <p className="leading-snug text-white/45">Re-charting listens to the song again and places the tiles afresh.</p>
         </Section>
 
-        <Section title="On another device">
+        <Section title="Publish">
+          <p className="leading-snug text-white/55">{PUBLISH_HINTS[publication]}</p>
+          <div className="flex flex-wrap gap-2">
+            {publication !== 'live' && (
+              <button type="button" className={small} disabled={busy} onClick={() => onPublish(song.id)}>
+                {publication === 'draft' ? 'Publish' : 'Update the published song'}
+              </button>
+            )}
+            {publication !== 'draft' &&
+              (takingDown ? (
+                <>
+                  <span className="self-center text-white/80">Take it down for everyone?</span>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => {
+                      setTakingDown(false);
+                      onUnpublish(song.id);
+                    }}
+                    className="rounded-full bg-red-500/80 px-4 py-2 text-xs font-bold text-white hover:bg-red-500 disabled:opacity-40"
+                  >
+                    Take it down
+                  </button>
+                  <button type="button" className={small} onClick={() => setTakingDown(false)}>
+                    Keep it up
+                  </button>
+                </>
+              ) : (
+                <button type="button" className={small} disabled={busy} onClick={() => setTakingDown(true)}>
+                  Take it down…
+                </button>
+              ))}
+          </div>
+        </Section>
+
+        <Section title="Song file">
           <p className="leading-snug text-white/55">
-            {synced
-              ? 'This song is kept in your account, so it turns up on your other devices once you sign in there. A song file is a backup, or a way to move it without signing in.'
-              : 'This song lives in this browser only. Sign in on the song list to sync it, or save it as a file and choose that file with “Add your own song” on the other device.'}
+            {publication === 'draft'
+              ? 'A draft is on this device only. Save it as a file to keep a backup, or to add it on another computer with “Add your own song”.'
+              : 'The published song is on every device already. A song file is a backup of this one.'}
           </p>
           <button type="button" className={small} disabled={busy} onClick={() => onSave(song.id)}>
             Save song file
@@ -313,9 +360,9 @@ export function TuneScreen({ song, busy, synced = false, status, onTune, onRecha
           {confirming ? (
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-white/80">
-                {synced
-                  ? 'Delete this song and its audio from this device and from your account, so it goes from your other devices too?'
-                  : 'Delete this song and its audio from this device?'}
+                {publication === 'draft'
+                  ? 'Delete this song and its audio from this device? It is not published, so it is gone unless you saved a song file.'
+                  : 'Delete this song from this device? It stays published, so its chart comes back the next time the page looks at the published songs. To remove it for everyone, take it down first.'}
               </span>
               <button
                 type="button"

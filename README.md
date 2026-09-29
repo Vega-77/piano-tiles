@@ -1,8 +1,8 @@
 # Piano Tiles
 
-A mobile-responsive Piano Tiles clone with a rhythm twist. Add a song of your own (an mp4 or any audio file) and it plays continuously while tiles fall down four lanes in time with its beat. Tap each tile as it lines up with the timing bar: the closer, the more points, and a run of perfects multiplies everything. Every time the song ends it comes round again, faster.
+A mobile-responsive Piano Tiles clone with a rhythm twist. A song plays continuously while tiles fall down four lanes in time with its beat. Tap each tile as it lines up with the timing bar: the closer, the more points, and a run of perfects multiplies everything. Every time the song ends it comes round again, faster.
 
-There are no songs built in: the game starts empty, and the songs are the ones you add (see [Adding songs](#adding-songs)).
+The songs are published in a shared database, so they are there to play on any device, and each has a leaderboard you can put a nickname on. Adding a song (from an mp4 or any audio file) is done by the owner in the app itself, once, and everyone plays that one chart (see [Songs, and who can add them](#songs-and-who-can-add-them)).
 
 **Play online: https://vega-77.github.io/piano-tiles/**
 
@@ -70,40 +70,73 @@ Every song opens at a brisk tempo of its own. Each time the song finishes a lap,
 | **Hold** (gold, 2–4 rows tall) | Press as its head lines up with the bar (graded like a tap) and keep holding. It pays out a tick every half row for as long as you hold, worth more the longer it is. **Letting go early never ends the game**: you just stop earning ticks. Tapping the next tile also lets go of the hold. |
 | **Double hold** | Two holds in the same row, one lane apart, joined by the glowing bar at their heads. Press both heads (each is graded on its own) and keep both down; each pays its own ticks, and lifting one finger early only stops that one. Rarer than the other tiles: about a quarter to two-fifths of a song's holds, never two within 16 rows. |
 
-Best score, best chain and most laps are saved per song in `localStorage`.
+Best score, best chain and most laps are saved per song in `localStorage`, and a run's score also goes on the song's [leaderboard](#leaderboards-and-nicknames).
 
-## Adding songs
+## Songs, and who can add them
 
-The game has no songs of its own: you add them. Drop in an mp4 (or mp3, m4a, wav, ogg, flac, mov, webm, anything with an audio track) and the tiles are laid out on its beat. The original recording plays, and each lap it plays faster along with the tiles (the pitch rises with it).
+The songs everyone plays are **published**: they live in a shared Firebase database, and every device brings a copy onto itself when the page opens. Open the game and they are there, on any device, with nothing to install and no command to run. A song's chart (a small piece of JSON) arrives at once and its audio (the big part) is downloaded the first time the song is played, with a progress figure on the Play button. After that the song is stored in that browser (IndexedDB), so it plays offline.
 
-It all happens **in the browser, on the device you are holding**. There is nothing to install and no command to run, so it works the same on the published site, on a phone, or on a computer you have never used before:
+**One song has one chart.** A song is analysed once, by whoever adds it, and that one chart is what everyone plays. Nobody else's device works it out again, so everybody's tiles are the same, and so are their scores.
 
-1. Drop the file anywhere on the song list, or tap **Add your own song** and choose it. The listening takes a few seconds for a typical song (a progress bar shows how far along it is, with a Cancel button).
-2. The new song appears in the list, charted at Medium and about 70–80 seconds long. Play it. If it doesn't feel right, tap **Tune** on the "Added" message, or **Tune this song** under the song's card (below).
+**Adding a song is for the owner only.** Everyone else sees no add or tune controls. The owner is whoever is listed in the database's `admins` collection (see [Setting it up](#setting-it-up-once-in-the-firebase-console)). This is decided by the database's rules, not by the page, so it can't be got around by editing the page: a typed password would sit in the page's code where anyone can read it, and a check that lives in the page can't keep anyone out of a database that is open to the internet.
 
-The file never leaves the device: it isn't uploaded anywhere, and it isn't added to this repository.
+### Publishing songs (admin)
 
-The song list is only for picking. Everything technical (name, sync, tempo, how many tiles) lives on the separate **Tune** screen.
+Once signed in with the admin's Google account the song list shows the tools. It all happens **in the browser, on the device you are holding**: no install, no command.
+
+1. Drop an mp4 (or mp3, m4a, wav, ogg, flac, mov, webm, anything with an audio track) anywhere on the song list, or tap **Add your own song** and choose it. The listening takes a few seconds for a typical song (a progress bar shows how far along it is, with a Cancel button). The tiles are laid out on the beat, and the song appears as a **Draft**: it is on this device only, and only the admin sees it.
+2. Play it. If it doesn't feel right, **Tune** it (below), re-chart it, try again.
+3. On the Tune screen, **Publish**. The audio goes up first and then the chart, so a song is never in the database without its sound. Everyone has it the next time they open the game (or return to the page).
+4. Changed a published song? The card says **Unpublished changes**; **Update the published song** replaces the one chart. **Take it down…** removes it for everyone (it stays on your device as a draft).
+
+A song's badge says where it stands: **Draft** (never published), **Unpublished changes** (published, and changed since), **Published**.
+
+The file being added is not stored anywhere but your device and, once you publish, the database. It is never added to this repository.
 
 ### Where songs are kept
 
-A song (its chart and its audio) is saved in that browser's own storage (IndexedDB), so it is still there next time, but **only on that device and in that browser**. To play it somewhere else, open **Tune this song**, then **Save song file**, which downloads a `.pianotiles` file with the song, its audio and its tuning in one. On the other device, choose that file with **Add your own song** (or drop it on the list). The song comes back exactly as it was, with no listening needed. Adding the same file again replaces that song; a different song with the same name gets a name of its own.
+A song (its chart and its audio) is saved in that browser's own storage (IndexedDB), so it is still there next time and plays offline, but **only in that browser**. For everyone but the admin that is just a cache of the published songs, which come back by themselves. For the admin, a draft exists only there until it is published, so to move a draft to another device, open **Tune this song**, then **Save song file**, which downloads a `.pianotiles` file with the song, its audio and its tuning in one. On the other device, choose that file with **Add your own song** (or drop it on the list). Adding the same file again replaces that song; a different song with the same name gets a name of its own.
 
-Clearing a site's data removes its songs, and a private window forgets them when it closes (the game says so when the browser won't keep them). Save the song files of anything you would miss.
+Clearing a site's data removes its songs (the published ones come back at the next visit), and a private window forgets them when it closes (the game says so when the browser won't keep them).
 
-### Syncing songs between devices (optional)
+### How devices stay in step
 
-**Sign in with Google** at the top of the song list and your songs follow you: what you add, tune or remove on one device turns up on the others once they are signed in too. Nobody has to sign in to play; without it everything works as described above, on that device alone. The device's own copy (IndexedDB) is always the one the game plays from, so it works offline, and the `.pianotiles` file stays as a backup.
+Each device keeps a copy of every published song and records, in the song's `publishedAt`, which published version the copy is. When the page opens, when the connection comes back, and when you return to the page after a minute or more, the device looks at the published songs and:
 
-It runs on Firebase's **free Spark plan**, using only **Authentication (Google)** and **Firestore**. There is no Cloud Storage (it needs a card), no Analytics, and nothing to pay. Firebase itself is only downloaded once someone signs in.
+- adds a song it hasn't got (its chart; the audio comes when it is first played),
+- brings a copy that is behind up to date,
+- drops a copy of a song that was taken down,
+- and never touches the admin's unpublished changes or drafts.
 
-- **What is stored:** under `users/<your uid>/songs/<song id>` there is one document per song (its chart and where its audio is), and its audio in pieces of 900 KB in a `parts` collection beside it, because a document can be at most 1 MiB. The rules in [`firestore.rules`](firestore.rules) let a signed-in account reach only what is under its own uid.
-- **Which copy wins:** every change stamps the song with the time (`savedAt`). When the two sides differ, the newer copy wins, and equal times mean the same song. A song from before syncing counts as oldest and is stamped the first time it is sent.
-- **Removing a song** leaves a small note in the cloud (its audio is deleted, the note stays), so the other devices know it was removed rather than never there. A song changed after it was removed elsewhere comes back.
-- **When it syncs:** at sign-in, a moment after each change, when the connection comes back, and when you return to the page after a minute or more. **Sync now** does it on request.
-- **Limits:** the free plan holds 1 GiB and allows 50,000 reads and 20,000 writes a day. A song's audio bigger than 40 MB isn't sent (the song stays on that device, the song list says so, and the song file still moves it). The game says so if the free daily limit runs out.
+### Leaderboards and nicknames
 
-**Setting it up (once, in the Firebase console):** the web config is public and lives in `src/cloud/config.ts` (it is not a secret; the rules are what protect the data). In the console for that project: turn on **Google** under Authentication → Sign-in method; add the site's domain (for this site, `vega-77.github.io`) under Authentication → Settings → Authorized domains; create a Firestore database (production mode); and publish the contents of `firestore.rules` under Firestore → Rules. To stop other people who sign in from using up your free quota, use the second rule in that file, with your own uid from Authentication → Users (keep it in the console; don't commit it).
+Every published song has a leaderboard (the top ten, with your own place shown if you are below them). Nobody has to sign in to play, and nobody has to before their first run.
+
+- **After a run**, a player with no nickname is asked for one. Choosing it makes them a **guest** (a Firebase anonymous account, made at that moment and not before), and their score goes on the board. The nickname and the guest account stay on that device for future runs.
+- **Nicknames are unique** whatever their capitals (`Pat` and `pat` are the same name), 3–16 letters, numbers, `-` and `_`, and once taken are the account's for good. The database enforces it, not just the page: a nickname is a document that can only be created once.
+- **Only after a run.** A score is sent for a song as it is published, when the run ends, and only if it beats the player's best on that song; the leaderboard keeps one entry per player per song. A run of zero isn't sent.
+- **Keeping a nickname.** A guest lives only in that browser, so clearing the browser's data loses it (and the name stays taken). **Keep it with Google** (or **Sign in with Google**, for someone who has played before) under the title turns the guest into a Google account with the same nickname and scores, which then follows the player to other devices. Only a Google account can sign out.
+- **What the rules keep out:** someone else's name, someone else's entry, a lowered score, extra fields, and absurd numbers (at most 100,000,000 points, 1,000 laps, a chain of 100,000). What they can't keep out is cheating: the game runs in the player's browser, so a determined player can send any score inside those limits. That is fine for friends; for a wide public it would need scores checked on a server, which is beyond the free plan.
+- **Not there:** replays and ghosts.
+
+Boards are read a few at a time and looked at again only after three minutes or after the player's own run, to stay inside the free daily reads.
+
+### The free plan
+
+It runs on Firebase's **free Spark plan**, using only **Authentication** (Google, and anonymous for guests) and **Firestore**. There is no Cloud Storage (it needs a card), no Cloud Functions, no Analytics, and nothing to pay. Firebase itself is only downloaded when the page opens the published songs (a few hundred KB, cached afterwards).
+
+- **What is stored:** `songs/<id>` (a song's chart and where its audio is) with the audio in pieces of 900 KB under `songs/<id>/parts` (a document can be at most 1 MiB), `songs/<id>/scores/<uid>` (one entry per player), `players/<uid>` and `names/<nickname in lower case>` (nicknames), and `admins/<uid>`. The rules in [`firestore.rules`](firestore.rules) say who can read and write each.
+- **Limits:** the free plan holds 1 GiB, allows about 50,000 reads and 20,000 writes a day, and about 10 GiB a month of downloads. A song's audio bigger than 40 MB can't be published. Downloading one 40 MB song is about 45 reads, and each device downloads it once; with friends that is comfortable, and a large public audience would need a paid plan (or audio hosted somewhere else). The game says so if the daily limit runs out.
+- **The audio is publicly readable.** Anyone with the site's address can download the published audio. Only publish music you have the right to distribute, and keep in mind that a public database of copyrighted recordings can be reported. Songs you own or have licensed are the safe ones.
+- **Old per-user sync:** an earlier version synced each signed-in user's own songs under `users/<uid>`. That is gone. Nothing reads that collection any more, and it can be deleted in the console.
+
+### Setting it up once, in the Firebase console
+
+The web config is public and lives in `src/cloud/config.ts` (it is not a secret; the rules are what protect the data). In the console for that project:
+
+1. **Authentication → Sign-in method:** turn on **Google** and **Anonymous**. Under Settings → Authorized domains, add the site's domain (`vega-77.github.io`).
+2. **Firestore Database:** create the database (production mode), then publish the contents of [`firestore.rules`](firestore.rules) under Rules.
+3. **Make yourself the admin:** open the deployed game, tap **Sign in with Google** under the title, and sign in. The panel then shows an **Account id**: copy it. In Firestore, create a document in a collection called `admins` whose **Document ID** is that id (any field will do, for example `admin: true`). Reload the game and the tools appear. Keep the id out of the repository.
 
 ### How the tiles are placed
 
@@ -119,7 +152,7 @@ That works best on music with a steady beat: pop, rock, electronic, hip-hop. Mus
 
 ### Tune this song
 
-Every added song has a **Tune** screen of its own, opened with **Tune this song** (it appears under the song you have selected) or the **Tune** button on the "Added" message. **Songs** or `Esc` goes back to the list; **Try it** plays the song, and quitting the game brings you back to the Tune screen so you can adjust and try again.
+Only the admin sees this. Every added song has a **Tune** screen of its own, opened with **Tune this song** (it appears under the song you have selected) or the **Tune** button on the "Added" message. **Songs** or `Esc` goes back to the list; **Try it** plays the song, and quitting the game brings you back to the Tune screen so you can adjust and try again.
 
 | Control | Use it when |
 | --- | --- |
@@ -128,17 +161,18 @@ Every added song has a **Tune** screen of its own, opened with **Tune this song*
 | **Easy / Medium / Hard** + **Re-chart** | There are too many or too few tiles. Easy leaves a free row between tiles and has doubles now and then; Medium and Hard allow tiles in neighbouring rows, with Hard the fullest and the most doubles. **Re-chart** is always available, so you can also use it to lay the tiles out again with the latest analyser without changing anything else. A song keeps the tiles it has until you re-chart it, so songs added before the levels moved up one, or before doubles, double holds, lengths and the beat-aligned start, keep their old tiles until then. |
 | **Short / Medium / Long** + **Re-chart** | The lap is too short or too long. Each is a range (60–70 s, 70–80 s, 80–90 s); a longer song is stopped at the best bar line inside it (see [Where a long song stops](#how-the-tiles-are-placed)). The screen says where this song would stop. Songs added before lengths existed play in full until re-charted. |
 | **Name** + **Save** | To rename it. |
-| **Save song file** | To take the song to another device, or keep a backup. |
-| **Remove song…** | To take it out of this device (asks first). When signed in, it goes from your account and your other devices too. |
+| **Publish** / **Update the published song** / **Take it down…** | To share the song with everyone, replace the one published chart with this one, or remove it for everyone (it stays here as a draft). |
+| **Save song file** | To take a draft to another device, or keep a backup. |
+| **Remove song…** | To take it out of this device (asks first). A published song stays published, and comes back at the next visit; take it down first to remove it for everyone. |
 
-Changes are saved on this device straight away.
+Changes are saved on this device straight away, and reach everyone only when you publish them.
 
 ### Notes
 
 - Up to 300 MB per file and about ten minutes of music (that is what gets listened to; a lap is then cut to 60–90 s as above). Only one song is worked on at a time.
 - A small mp3, m4a, aac or wav is kept as it came. A video, or anything else the browser might not play back, is stored as just its sound (a WAV, so a long video takes more room than the mp4 did).
 - The browser has to be able to decode the file. mp3, m4a/mp4 and wav work everywhere; ogg, flac, webm and mov depend on the browser, and the game says so if it can't read one.
-- Only add music you have the right to use. Nothing is uploaded or published, but songs you add are yours to answer for.
+- Only add music you have the right to use. Nothing leaves your device until you press **Publish**, and a published song's audio can be downloaded by anyone (see [The free plan](#the-free-plan)).
 
 ## How it works
 
@@ -162,9 +196,11 @@ The 60fps loop lives outside React so per-frame movement never triggers a render
 | `src/songs/` | Note-notation parser and the arrangement builder (used by the synth path and the tests), and `songs.ts`, the numbers the screens show about a song |
 | `src/songs/analysis/` | The in-browser analyser for added songs: spectral onsets, tempo and beat grid, tile placement (`analyze.ts` and friends), where a long song stops (`length.ts`), run in a worker (`analyzer.worker.ts`, `client.ts`) |
 | `src/songs/` (added songs) | `decode.ts` reads a file's audio, `importer.ts` adds / re-charts / tunes / removes a song, `store.ts` keeps songs in IndexedDB, `bundle.ts` is the `.pianotiles` song file, `chart.ts` and `library.ts` turn stored charts into playable songs |
-| `src/cloud/` | Syncing: `sync.ts` plans (`planSync`, pure) and runs (`runSync`) a sync of this device against the cloud; `firestore.ts` is the account's songs in Firestore (audio cut into pieces); `firebase.ts` loads the SDK on demand and signs in; `removals.ts` remembers what was removed here; `errors.ts` words for what can go wrong; `config.ts` the public Firebase config |
-| `src/hooks/useCloud.ts` | Sign-in state and when to sync (sign-in, changes, coming back online or to the page) |
-| `src/components/` | The screens and overlays: song list (`SongSelect`, `CloudPanel`, `ImportPanel`, `JobStatus`), the separate `TuneScreen`, the HUD, pause and game over |
+| `src/cloud/` | The shared database: `catalog.ts` reads and writes the published songs (audio cut into pieces); `reconcile.ts` plans (`planCatalog`, pure) and runs (`syncCatalog`, `ensureAudio`) bringing this device level with them; `publish.ts` publishes and takes down; `board.ts` the leaderboards, nicknames and admin check; `names.ts` the nickname rules; `firebase.ts` loads the SDK on demand and signs in; `errors.ts` words for what can go wrong; `config.ts` the public Firebase config; `testing.ts` fake backends for the tests |
+| `firestore.rules` | Who may read and write what in the database (pasted into the console; see [Setting it up](#setting-it-up-once-in-the-firebase-console)) |
+| `src/hooks/useCloud.ts` | Who is signed in (guest or Google), the nickname, whether they are the admin, and score submission |
+| `src/hooks/useCatalog.ts` | Keeps the published songs level with this device (when the page opens, the connection returns, or you come back) and fetches a song's audio when it is first played |
+| `src/components/` | The screens and overlays: song list (`SongSelect`, `AccountPanel`, `ImportPanel`, `JobStatus`), the separate `TuneScreen` (with Publish), the leaderboard (`Leaderboard`, `NameForm`, `RunStanding`), the HUD, pause and game over |
 | `src/hooks/useGame.ts` | Bridges the engine to React; state updates only on start, each score, each lap, pause and game over |
 | `src/index.css` | Tile looks and animations, switched by `data-kind` / `data-state` attributes |
 | `src/config.ts` | Tunables: timing windows, points, chain steps, lap speed step |

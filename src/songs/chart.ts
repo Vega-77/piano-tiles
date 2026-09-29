@@ -1,5 +1,5 @@
 import { MAX_HOLD_ROWS, MIN_HOLD_ROWS, TILE_HEIGHT } from '../config';
-import type { BeatSpec, Difficulty, Song } from '../types';
+import type { BeatSpec, Difficulty, Publication, Song } from '../types';
 import { lengthFrom } from './analysis/length';
 import { densityFrom } from './analysis/tiles';
 import { beatRows } from './notation';
@@ -38,6 +38,12 @@ export interface ChartFile {
    * devices the copy with the later time wins. Missing on a song saved before syncing existed.
    */
   savedAt?: number;
+  /**
+   * The `savedAt` of the version of this song that is published for everyone, when it has been
+   * published. A song with none is a draft, only on this device; one whose `savedAt` is later than
+   * this has been changed since. A copy taken from the catalogue is never changed, so the two match.
+   */
+  publishedAt?: number;
   difficulty: Difficulty;
   hue: number;
   hue2: number;
@@ -218,6 +224,7 @@ export function validateChart(raw: unknown): ChartFile {
     if (chart.end <= chart.offset) fail('"end" must be after "offset"');
   }
   if (c.savedAt !== undefined) chart.savedAt = numberField(c.savedAt, 'savedAt', 0, Number.MAX_SAFE_INTEGER);
+  if (c.publishedAt !== undefined) chart.publishedAt = numberField(c.publishedAt, 'publishedAt', 0, Number.MAX_SAFE_INTEGER);
   if (typeof c.analysis === 'object' && c.analysis !== null) chart.analysis = c.analysis as ChartAnalysis;
   return chart;
 }
@@ -275,8 +282,15 @@ export function songFromChart(chart: ChartFile, folderUrl: string): Song {
       manualBpm: chart.analysis?.manualBpm ?? false,
       level: densityFrom(chart.analysis?.level),
       length: lengthFrom(chart.analysis?.length),
+      publication: publicationOf(chart),
       confidence: chart.analysis?.confidence,
       warnings: chart.analysis?.warnings ?? [],
     },
   };
+}
+
+/** Where a song stands with the published catalogue: never published, changed since, or exactly as published. */
+export function publicationOf(chart: Pick<ChartFile, 'savedAt' | 'publishedAt'>): Publication {
+  if (chart.publishedAt === undefined) return 'draft';
+  return (chart.savedAt ?? 0) > chart.publishedAt ? 'changed' : 'live';
 }

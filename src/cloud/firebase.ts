@@ -1,10 +1,11 @@
 import { firebaseConfig } from './config';
-import { createFirestoreSongs } from './firestore';
+import { createFirestorePlayers, createFirestoreScores } from './board';
+import { createFirestoreCatalog } from './catalog';
 import type { CloudAccount, CloudBackend } from './types';
 
 /**
- * Firebase is loaded only when it is wanted (at a sign-in, or at the start for someone who was
- * signed in before), so a visit that never touches the cloud doesn't download any of it.
+ * Firebase is loaded on its own, in the background, once the page is up (the songs everyone plays
+ * come from it), so the menu doesn't wait for it.
  */
 async function load() {
   const [app, auth, firestore] = await Promise.all([import('firebase/app'), import('firebase/auth'), import('firebase/firestore')]);
@@ -25,12 +26,25 @@ const connection = () =>
     throw error;
   }));
 
-const accountOf = (user: { uid: string; displayName: string | null; email: string | null }): CloudAccount => ({
+type SignedIn = {
+  uid: string;
+  displayName: string | null;
+  email: string | null;
+  isAnonymous: boolean;
+  providerData?: readonly { displayName: string | null; email: string | null }[];
+};
+
+const accountOf = (user: SignedIn): CloudAccount => ({
   uid: user.uid,
-  name: user.displayName || user.email || 'your account',
+  // (Right after a guest is upgraded, the name is only on the Google side of the account.)
+  name: user.displayName || user.providerData?.find((info) => info.displayName)?.displayName || user.email || 'Guest',
+  guest: user.isAnonymous,
 });
 
-/** Sign in with Google, and the songs in Firestore, both through the Firebase project in config.ts. */
+/** Everyone watching who is signed in, so a change that Firebase doesn't announce (a guest upgraded to Google) can be. */
+const watchers = new Set<(account: CloudAccount | null) => void>();
+
+/** Sign-in (Google, or a guest with no details) and the songs, leaderboards and names in Firestore, all through the Firebase project in config.ts. */
 export const firebaseBackend: CloudBackend = {
   warmUp() {
     void connection().catch(() => undefined); // (a failure is met again, and shown, when it matters)
@@ -39,6 +53,7 @@ export const firebaseBackend: CloudBackend = {
   watch(listener, onError) {
     let stopped = false;
     let stop: (() => void) | undefined;
+    watchers.add(listener);
     connection().then(
       ({ auth, session }) => {
         if (stopped) return;
@@ -48,13 +63,40 @@ export const firebaseBackend: CloudBackend = {
     );
     return () => {
       stopped = true;
+      watchers.delete(listener);
       stop?.();
     };
   },
 
-  async signIn() {
+  async signInAsGuest() {
     const { auth, session } = await connection();
-    await auth.signInWithPopup(session, new auth.GoogleAuthProvider());
+    return accountOf((await auth.signInAnonymously(session)).user);
+  },
+
+  async signInWithGoogle() {
+    const { auth, session } = await connection();
+    const provider = new auth.GoogleAuthProvider();
+    const guest = session.currentUser?.isAnonymous ? session.currentUser : null;
+    if (!guest) {
+      await auth.signInWithPopup(session, provider);
+      return;
+    }
+    try {
+      // The guest becomes a Google account without changing: same nickname, same scores.
+      await auth.linkWithPopup(guest, provider);
+    } catch (error) {
+      // This Google account was signed in before, here or elsewhere, and has a name of its own: it is the one to use.
+      const credential =
+        (error as { code?: unknown } | null)?.code === 'auth/credential-already-in-use'
+          ? auth.GoogleAuthProvider.credentialFromError(error as Parameters<typeof auth.GoogleAuthProvider.credentialFromError>[0])
+          : null;
+      if (!credential) throw error;
+      await auth.signInWithCredential(session, credential);
+      return;
+    }
+    // (Linking is not a sign-in as far as Firebase is concerned, so nothing told the page.)
+    const user = session.currentUser;
+    if (user) for (const listener of watchers) listener(accountOf(user));
   },
 
   async signOut() {
@@ -62,8 +104,18 @@ export const firebaseBackend: CloudBackend = {
     await auth.signOut(session);
   },
 
-  async songs(account) {
+  async catalog() {
     const { firestore, db } = await connection();
-    return createFirestoreSongs(firestore, db, account.uid);
+    return createFirestoreCatalog(firestore, db);
+  },
+
+  async scores() {
+    const { firestore, db } = await connection();
+    return createFirestoreScores(firestore, db);
+  },
+
+  async players() {
+    const { firestore, db } = await connection();
+    return createFirestorePlayers(firestore, db);
   },
 };

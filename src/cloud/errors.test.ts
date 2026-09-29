@@ -13,7 +13,7 @@ describe('words for what went wrong', () => {
   it('explains the setup problems the owner can fix', () => {
     expect(describeCloudError({ code: 'permission-denied' })).toMatch(/rules/);
     expect(describeCloudError({ code: 'auth/unauthorized-domain' })).toMatch(/Authorized domains/);
-    expect(describeCloudError({ code: 'auth/operation-not-allowed' })).toMatch(/Google sign-in/);
+    expect(describeCloudError({ code: 'auth/operation-not-allowed' })).toMatch(/sign-in/);
     expect(describeCloudError({ code: 'auth/popup-blocked' })).toMatch(/pop-ups/);
   });
 

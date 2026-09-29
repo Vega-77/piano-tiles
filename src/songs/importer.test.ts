@@ -17,9 +17,8 @@ import {
   type Stage,
   type Tools,
 } from './importer';
-import { createMemoryRemovals } from '../cloud/removals';
 import { createMemoryStore } from './store';
-import { fakeChart, fakeDecoded, fakeFile } from './testing';
+import { fakeDecoded, fakeFile } from './testing';
 
 interface Heard {
   samples: number;
@@ -380,18 +379,12 @@ describe('moving a song to another device', () => {
   });
 });
 
-describe('keeping track of changes, for syncing', () => {
+describe('when a song was saved', () => {
   const at = (time: number) => vi.spyOn(Date, 'now').mockReturnValue(time);
   afterEach(() => vi.restoreAllMocks());
 
-  const withRemovals = () => {
-    const removals = createMemoryRemovals();
-    const { store, tools } = setup();
-    return { store, removals, tools: { ...tools, removals } };
-  };
-
   it('stamps a new song with the time, and every change after with a later one, even within a millisecond', async () => {
-    const { store, tools } = withRemovals();
+    const { store, tools } = setup();
     at(1_000_000);
     const chart = await addSong(fakeFile(500, 'Song.mp3', 'audio/mpeg'), {}, {}, tools);
     expect(chart.savedAt).toBe(1_000_000);
@@ -405,7 +398,7 @@ describe('keeping track of changes, for syncing', () => {
   });
 
   it('never goes back in time, even if this device’s clock is behind the one that saved the song', async () => {
-    const { store, tools } = withRemovals();
+    const { store, tools } = setup();
     at(1_000_000);
     const chart = await addSong(fakeFile(500, 'Song.mp3', 'audio/mpeg'), {}, {}, tools);
     at(10);
@@ -413,38 +406,25 @@ describe('keeping track of changes, for syncing', () => {
     expect((await saved(store, chart.id)).savedAt).toBe(1_000_001);
   });
 
-  it('notes a removal as a change made after the song’s last one', async () => {
-    const { removals, tools } = withRemovals();
-    at(2_000_000);
+  it('keeps the mark of a published song through a change, which is what makes it a changed one', async () => {
+    const { store, tools } = setup();
+    at(1_000_000);
     const chart = await addSong(fakeFile(500, 'Song.mp3', 'audio/mpeg'), {}, {}, tools);
-    at(1_500_000);
+    await store.save({ ...chart, publishedAt: chart.savedAt });
 
-    await removeSong(chart.id, {}, tools);
+    await tuneSong(chart.id, { title: 'Renamed' }, {}, tools);
 
-    expect(removals.all().get(chart.id)).toBe(2_000_001);
-  });
-
-  it('notes the removal of a song from before syncing too', async () => {
-    const { store, removals, tools } = withRemovals();
-    await store.save({ ...fakeChart('old'), audio: 'audio-00000000.mp3' }, new Blob(['x']));
-    at(3_000_000);
-
-    await removeSong('old', {}, tools);
-
-    expect(removals.all().get('old')).toBe(3_000_000);
-  });
-
-  it('leaves no note when the song was never there to remove', async () => {
-    const { removals, tools } = withRemovals();
-    await removeSong('nothing', {}, tools);
-    expect(removals.all().size).toBe(0);
+    const after = await saved(store, chart.id);
+    expect(after.publishedAt).toBe(1_000_000);
+    expect(after.savedAt).toBe(1_000_001);
   });
 
   describe('a song file', () => {
-    async function exportedAt(time: number) {
+    async function exportedAt(time: number, publishedAt?: number) {
       const other = setup();
       at(time);
       const chart = await addSong(fakeFile(500, 'Road Trip.mp3', 'audio/mpeg'), {}, {}, other.tools);
+      if (publishedAt !== undefined) await other.store.save({ ...chart, publishedAt });
       const { blob, filename } = await exportSong(chart.id, other.tools);
       return { file: new File([blob], filename), chart };
     }
@@ -452,7 +432,7 @@ describe('keeping track of changes, for syncing', () => {
     it('keeps its own time on a device that has not got the song', async () => {
       const { file, chart } = await exportedAt(5_000_000);
       at(9_000_000);
-      const { store, tools } = withRemovals();
+      const { store, tools } = setup();
       const added = await addSong(file, {}, {}, tools);
       expect(added.savedAt).toBe(chart.savedAt);
       expect((await saved(store, chart.id)).savedAt).toBe(5_000_000);
@@ -460,7 +440,7 @@ describe('keeping track of changes, for syncing', () => {
 
     it('counts as a change made now when it replaces the song', async () => {
       const { file, chart } = await exportedAt(5_000_000);
-      const { store, tools } = withRemovals();
+      const { store, tools } = setup();
       at(6_000_000);
       await addSong(new File([await file.arrayBuffer()], file.name), {}, {}, tools);
       at(7_000_000);
@@ -469,13 +449,12 @@ describe('keeping track of changes, for syncing', () => {
       expect((await saved(store, chart.id)).savedAt).toBe(7_000_000);
     });
 
-    it('counts as added after a removal of the same song here, so a sync does not take it out again', async () => {
-      const { file, chart } = await exportedAt(5_000_000);
-      const { removals, tools } = withRemovals();
-      removals.add(chart.id, 8_000_000);
-      at(6_000_000);
+    it('is a draft here, whatever was published from the device it came from', async () => {
+      const { file, chart } = await exportedAt(5_000_000, 5_000_000);
+      const { store, tools } = setup();
       const added = await addSong(file, {}, {}, tools);
-      expect(added.savedAt).toBe(8_000_001);
+      expect(added.publishedAt).toBeUndefined();
+      expect((await saved(store, chart.id)).publishedAt).toBeUndefined();
     });
   });
 });

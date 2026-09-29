@@ -2,22 +2,111 @@ rules_version = '2';
 
 // Paste these into Firebase console > Firestore Database > Rules, then Publish.
 //
-// Everything a player syncs lives under users/{their uid}/..., and only that signed-in person can
-// read or write it. Nothing else in the database is reachable.
+// What is in the database:
+//
+//   songs/{songId}                     a published song: its chart, and where its audio is
+//   songs/{songId}/parts/{part}        the audio, in pieces (a document can be at most 1 MiB)
+//   songs/{songId}/scores/{uid}        one player's best run on that song (the leaderboard)
+//   players/{uid}                      the nickname an account plays under (chosen once, for good)
+//   names/{nickname in lower case}     who owns a nickname, so no two players share one
+//   admins/{uid}                       the accounts that may publish songs (made by hand, see below)
+//
+// Who may do what:
+//
+//   - Anyone can read the songs and the leaderboards, so they can be played without signing in.
+//   - Only an admin can publish, change or take down a song.
+//   - A player (a guest, or a Google account) can write only their own entry on a leaderboard, under
+//     the nickname they have taken, only for a song that is published, and only to raise it.
+//   - A nickname can be taken once and is never changed or given up.
+//
+// To make an account an admin: sign in to the deployed game with Google, open the account panel (under
+// the title) and copy the account id shown there, then in Firebase console > Firestore Database create
+// a document in the collection `admins` whose Document ID is that id (it needs no fields, but Firestore
+// won't save a document with none, so add any, e.g. `admin: true`). Nothing in the app can write to
+// `admins`, so nobody can make themselves one. Keep the id out of this file and out of the repository.
+//
+// Limits worth knowing: the game runs in the player's browser, so a determined player can send any score
+// they like within the limits below. These rules stop the rest of the mess (someone else's name, someone
+// else's entry, a lowered score, made-up fields, absurd numbers), not cheating.
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /users/{uid}/{document=**} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return signedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    function validName(name) {
+      return name is string && name.matches('^[A-Za-z0-9_-]{3,16}$');
+    }
+
+    // ---- admins: an account can find out whether it is one, and that is all -----------------------
+    match /admins/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+    }
+
+    // ---- the published songs ----------------------------------------------------------------------
+    match /songs/{songId} {
+      allow read: if true;
+      allow write: if isAdmin();
+
+      match /parts/{part} {
+        allow read: if true;
+        allow write: if isAdmin();
+      }
+
+      // One entry per player. It is theirs to create and to raise, and an admin can remove it.
+      match /scores/{uid} {
+        function validRun() {
+          let run = request.resource.data;
+          let player = get(/databases/$(database)/documents/players/$(uid)).data;
+          return signedIn()
+              && request.auth.uid == uid
+              && exists(/databases/$(database)/documents/songs/$(songId))
+              && run.keys().hasOnly(['name', 'score', 'laps', 'chain', 'at'])
+              && run.keys().hasAll(['name', 'score', 'laps', 'chain', 'at'])
+              && run.name == player.name
+              && run.score is int && run.score >= 0 && run.score <= 100000000
+              && run.laps is int && run.laps >= 0 && run.laps <= 1000
+              && run.chain is int && run.chain >= 0 && run.chain <= 100000
+              && run.at == request.time;
+        }
+
+        allow read: if true;
+        allow create: if validRun() && request.resource.data.score > 0;
+        allow update: if validRun() && request.resource.data.score > resource.data.score;
+        allow delete: if isAdmin();
+      }
+    }
+
+    // ---- nicknames --------------------------------------------------------------------------------
+    // A nickname is taken by writing two documents in one batch: names/<nickname in lower case> (which
+    // can only ever be created, so it has one owner) and players/<uid> (which says which nickname the
+    // account has). Each rule looks at the other document as it will be once the batch is written, so
+    // neither can be written without the other agreeing.
+
+    match /names/{key} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+                    && request.resource.data.keys().hasOnly(['uid'])
+                    && request.resource.data.uid == request.auth.uid
+                    && existsAfter(/databases/$(database)/documents/players/$(request.auth.uid))
+                    && getAfter(/databases/$(database)/documents/players/$(request.auth.uid)).data.key == key;
+    }
+
+    match /players/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow create: if signedIn()
+                    && request.auth.uid == uid
+                    && request.resource.data.keys().hasOnly(['name', 'key'])
+                    && request.resource.data.keys().hasAll(['name', 'key'])
+                    && validName(request.resource.data.name)
+                    && request.resource.data.key == request.resource.data.name.lower()
+                    && existsAfter(/databases/$(database)/documents/names/$(request.resource.data.key))
+                    && getAfter(/databases/$(database)/documents/names/$(request.resource.data.key)).data.uid == uid;
     }
   }
 }
-
-// Optional, so strangers who sign in can't use up your free quota: swap the rule above for this one
-// and put your own uid (Authentication > Users > "User UID") where it says YOUR-UID-HERE. Keep the
-// uid in the console; don't commit it.
-//
-//     match /users/{uid}/{document=**} {
-//       allow read, write: if request.auth != null
-//                          && request.auth.uid == uid
-//                          && uid == 'YOUR-UID-HERE';
-//     }

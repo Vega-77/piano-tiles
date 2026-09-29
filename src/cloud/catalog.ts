@@ -2,7 +2,7 @@ import type { Firestore } from 'firebase/firestore';
 import { validateChart } from '../songs/chart';
 import { Cancelled } from '../songs/errors';
 import { CloudError } from './errors';
-import type { CloudSongs, RemoteAudio, RemoteSong, Transfer } from './types';
+import type { Catalog, RemoteAudio, RemoteSong, Transfer } from './types';
 
 /** The parts of the Firestore SDK used here. It is loaded when it is first needed, so it is handed in. */
 export type FirestoreSdk = typeof import('firebase/firestore');
@@ -40,7 +40,7 @@ async function inParallel(count: number, job: (n: number) => Promise<void>, sign
   await Promise.all(Array.from({ length: Math.min(PARALLEL, count) }, worker));
 }
 
-function withTimeout<T>(work: Promise<T>): Promise<T> {
+export function withTimeout<T>(work: Promise<T>): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const lost = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(Object.assign(new Error('The cloud did not answer.'), { code: 'unavailable' })), WRITE_TIMEOUT_MS);
@@ -50,32 +50,30 @@ function withTimeout<T>(work: Promise<T>): Promise<T> {
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
 
-/** A song from its document, or undefined for one this version can't make sense of (it is left alone, not synced). */
+/** A song from its document, or undefined for one this version can't make sense of (it is left out of the catalogue). */
 function readSong(id: string, data: unknown): RemoteSong | undefined {
-  if (!isRecord(data) || typeof data.savedAt !== 'number') return undefined;
-  if (data.deleted === true) return { id, savedAt: data.savedAt, deleted: true, chart: null, audio: null };
+  if (!isRecord(data) || typeof data.savedAt !== 'number' || typeof data.json !== 'string') return undefined;
   try {
-    if (typeof data.json !== 'string') return undefined;
     const chart = validateChart(JSON.parse(data.json));
     if (chart.id !== id) return undefined;
     const { audioName, audioType, audioSize, audioParts } = data;
     if (typeof audioName !== 'string' || typeof audioType !== 'string') return undefined;
     if (typeof audioSize !== 'number' || typeof audioParts !== 'number') return undefined;
-    return { id, savedAt: data.savedAt, deleted: false, chart, audio: { name: audioName, type: audioType, size: audioSize, parts: audioParts } };
+    return { id, savedAt: data.savedAt, chart, audio: { name: audioName, type: audioType, size: audioSize, parts: audioParts } };
   } catch {
     return undefined;
   }
 }
 
 /**
- * The account's songs in Firestore, under `users/<uid>/songs/<song id>`: one document per song
- * with its chart and where its audio is, and the audio in pieces beside it, in `parts`. The rules
- * (firestore.rules) let an account reach only what is under its own uid.
+ * The published songs in Firestore, under `songs/<song id>`: one document per song with its chart
+ * and where its audio is, and the audio in pieces beside it, in `parts`. The rules (firestore.rules)
+ * let anyone read them and only an admin write them.
  */
-export function createFirestoreSongs(sdk: FirestoreSdk, db: Firestore, uid: string): CloudSongs {
-  const songs = () => sdk.collection(db, 'users', uid, 'songs');
-  const songRef = (id: string) => sdk.doc(db, 'users', uid, 'songs', id);
-  const partRef = (id: string, audioName: string, n: number) => sdk.doc(db, 'users', uid, 'songs', id, 'parts', partId(audioName, n));
+export function createFirestoreCatalog(sdk: FirestoreSdk, db: Firestore): Catalog {
+  const songs = () => sdk.collection(db, 'songs');
+  const songRef = (id: string) => sdk.doc(db, 'songs', id);
+  const partRef = (id: string, audioName: string, n: number) => sdk.doc(db, 'songs', id, 'parts', partId(audioName, n));
 
   return {
     async list() {
@@ -110,7 +108,6 @@ export function createFirestoreSongs(sdk: FirestoreSdk, db: Firestore, uid: stri
       await withTimeout(
         sdk.setDoc(songRef(chart.id), {
           savedAt: chart.savedAt ?? 0,
-          deleted: false,
           json: JSON.stringify(chart),
           audioName: audio.name,
           audioType: audio.type,
@@ -118,10 +115,6 @@ export function createFirestoreSongs(sdk: FirestoreSdk, db: Firestore, uid: stri
           audioParts: audio.parts,
         }),
       );
-    },
-
-    async dropAudio(id, audio) {
-      await inParallel(audio.parts, (n) => withTimeout(sdk.deleteDoc(partRef(id, audio.name, n))));
     },
 
     async getAudio(id, audio, { progress, signal }: Transfer = {}) {
@@ -133,21 +126,21 @@ export function createFirestoreSongs(sdk: FirestoreSdk, db: Firestore, uid: stri
         async (n) => {
           const part = await sdk.getDocFromServer(partRef(id, audio.name, n));
           const data: unknown = part.data()?.data;
-          if (!(data instanceof sdk.Bytes)) throw new CloudError('A song in the cloud is missing a piece. Send it again from the device that has it.');
+          if (!(data instanceof sdk.Bytes)) throw new CloudError("This song's audio is not all in the cloud. Try again later.");
           pieces[n] = data.toUint8Array() as Uint8Array<ArrayBuffer>;
           progress?.(++done / audio.parts);
         },
         signal,
       );
       const blob = new Blob(pieces, { type: audio.type });
-      if (blob.size !== audio.size) throw new CloudError('A song in the cloud is incomplete. Send it again from the device that has it.');
+      if (blob.size !== audio.size) throw new CloudError("This song's audio is not all in the cloud. Try again later.");
       return blob;
     },
 
-    async remove(id, removedAt, audio) {
-      // The note first: if the pieces are then slow to go, the other devices already know the song is gone.
-      await withTimeout(sdk.setDoc(songRef(id), { savedAt: removedAt, deleted: true }));
-      if (audio) await inParallel(audio.parts, (n) => withTimeout(sdk.deleteDoc(partRef(id, audio.name, n)))).catch(() => undefined);
+    async remove(id, audio) {
+      // The song first: if the pieces are then slow to go, it has already stopped being offered.
+      await withTimeout(sdk.deleteDoc(songRef(id)));
+      await inParallel(audio.parts, (n) => withTimeout(sdk.deleteDoc(partRef(id, audio.name, n)))).catch(() => undefined);
     },
   };
 }

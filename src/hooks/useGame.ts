@@ -9,8 +9,11 @@ import type { GameState, Song } from '../types';
 
 const LANE_KEYS: Record<string, number> = { KeyD: 0, KeyF: 1, KeyJ: 2, KeyK: 3 };
 
+/** Gets whatever a song needs on this device before it can be played (its audio, if it is only in the cloud so far), reporting how far along it is (0–1). */
+export type Prepare = (song: Song, progress: (fraction: number) => void) => Promise<void>;
+
 /** Bridges the imperative engine and effects to React: state updates only on discrete game events. */
-export function useGame(songs: readonly Song[]) {
+export function useGame(songs: readonly Song[], prepare?: Prepare) {
   const bgRef = useRef<HTMLCanvasElement>(null);
   const fxRef = useRef<HTMLCanvasElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -20,6 +23,7 @@ export function useGame(songs: readonly Song[]) {
   const audioRef = useRef<AudioEngine | null>(null);
   const effectsRef = useRef<Effects | null>(null);
   const songsRef = useRef(songs);
+  const prepareRef = useRef(prepare);
   /** The song being fetched before it can start (a recording has to be downloaded and decoded first). */
   const loadingRef = useRef<string | null>(null);
 
@@ -29,10 +33,13 @@ export function useGame(songs: readonly Song[]) {
   const [pickedId, setSelectedId] = useState<string | null>(null);
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  /** How far along the download of the loading song's audio is (0–1), or null when it isn't being downloaded. */
+  const [loadProgress, setLoadProgress] = useState<number | null>(null);
 
   useEffect(() => {
     songsRef.current = songs;
-  }, [songs]);
+    prepareRef.current = prepare;
+  }, [songs, prepare]);
 
   // The song highlighted in the menu. A song that isn't there (not read yet, or just removed) can't
   // be highlighted: the first song stands in, and there is none while the library is empty.
@@ -123,6 +130,8 @@ export function useGame(songs: readonly Song[]) {
       loadingRef.current = songId;
       setLoadingId(songId);
       try {
+        await prepareRef.current?.(song, setLoadProgress);
+        setLoadProgress(null);
         await audio.load(song.recording.url);
       } catch (error) {
         setLoadError(error instanceof Error ? error.message : "Couldn't load the song's audio.");
@@ -130,6 +139,7 @@ export function useGame(songs: readonly Song[]) {
       } finally {
         loadingRef.current = null;
         setLoadingId(null);
+        setLoadProgress(null);
       }
       if (!engineRef.current) return; // (the page was closed while it loaded)
     }
@@ -171,6 +181,7 @@ export function useGame(songs: readonly Song[]) {
     activeSong,
     loadingId,
     loadError,
+    loadProgress,
     refs: { bgRef, fxRef, stageRef, boardRef, layerRef },
     start,
     quit,

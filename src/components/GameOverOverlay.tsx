@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { GAME_OVER_REVEAL_MS } from '../config';
 import type { FailReason, GameOverResult } from '../game/engine';
 import { DIFFICULTY_LABELS } from '../songs/songs';
@@ -43,11 +43,13 @@ interface GameOverOverlayProps {
   score: number;
   best: number;
   result: GameOverResult | null;
+  /** Under the stats: what the run did for the leaderboard (a name to ask for, or where it landed). */
+  standing?: ReactNode;
   onRestart: () => void;
   onMenu: () => void;
 }
 
-export function GameOverOverlay({ song, score, best, result, onRestart, onMenu }: GameOverOverlayProps) {
+export function GameOverOverlay({ song, score, best, result, standing, onRestart, onMenu }: GameOverOverlayProps) {
   // Hold the panel back briefly so the player can see what went wrong, and so a
   // frantic last tap can't land on a button.
   const [ready, setReady] = useState(false);
@@ -66,60 +68,65 @@ export function GameOverOverlay({ song, score, best, result, onRestart, onMenu }
 
   return (
     <div
-      className={`absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 bg-black/75 px-6 text-center text-white transition-opacity duration-500 ${
+      className={`absolute inset-0 z-20 flex flex-col items-center overflow-y-auto bg-black/75 px-6 py-6 text-center text-white transition-opacity duration-500 ${
         ready ? 'opacity-100' : 'pointer-events-none opacity-0'
       }`}
     >
-      <div>
-        <h2 className="text-sm font-semibold uppercase tracking-[0.35em] text-white/55">Game over</h2>
-        <p className="mt-1 text-base font-bold" style={{ color: 'hsl(var(--hue) 100% 78%)' }}>
-          {song.title}
-        </p>
-        <p className="text-xs text-white/45">{DIFFICULTY_LABELS[song.difficulty]}</p>
-        {result && <p className="mx-auto mt-2 max-w-[17rem] text-xs text-rose-300/90">{REASONS[result.reason]}</p>}
-      </div>
-
-      <p className="title-gradient text-7xl font-black tabular-nums leading-none">{shownScore.toLocaleString()}</p>
-
-      {result?.isNewBest ? (
-        <p className="badge-new-best rounded-full px-5 py-1.5 text-sm font-black uppercase tracking-widest text-zinc-950">
-          New best!
-        </p>
-      ) : (
-        <p className="text-sm uppercase tracking-widest text-white/50">
-          Best <span className="ml-2 text-xl font-bold tabular-nums text-white">{best.toLocaleString()}</span>
-        </p>
-      )}
-
-      {stats && (
-        <div className="grid w-full grid-cols-3 gap-2">
-          <Stat label="Perfect" value={stats.perfect} tone="hsl(48 100% 70%)" />
-          <Stat label="Good" value={stats.good} tone="hsl(160 90% 65%)" />
-          <Stat label="Ok" value={stats.ok} tone="hsl(215 90% 75%)" />
-          <Stat label="Best chain" value={stats.maxChain} />
-          <Stat label="Tiles" value={stats.tiles} />
-          <Stat label="Laps" value={stats.laps} />
+      {/* (`my-auto` centres it while it fits, and lets the panel scroll from its top when it doesn't) */}
+      <div className="my-auto flex w-full flex-col items-center gap-4">
+        <div>
+          <h2 className="text-sm font-semibold uppercase tracking-[0.35em] text-white/55">Game over</h2>
+          <p className="mt-1 text-base font-bold" style={{ color: 'hsl(var(--hue) 100% 78%)' }}>
+            {song.title}
+          </p>
+          <p className="text-xs text-white/45">{DIFFICULTY_LABELS[song.difficulty]}</p>
+          {result && <p className="mx-auto mt-2 max-w-[17rem] text-xs text-rose-300/90">{REASONS[result.reason]}</p>}
         </div>
-      )}
 
-      <div className="mt-1 flex w-full flex-col gap-3">
-        <button
-          ref={restartRef}
-          type="button"
-          onClick={onRestart}
-          disabled={!ready}
-          className="btn-primary rounded-full px-10 py-4 text-lg font-extrabold text-white"
-        >
-          Play again
-        </button>
-        <button
-          type="button"
-          onClick={onMenu}
-          disabled={!ready}
-          className="btn-ghost rounded-full px-10 py-3 text-base font-bold text-white/90"
-        >
-          Choose another song
-        </button>
+        <p className="title-gradient text-7xl font-black tabular-nums leading-none">{shownScore.toLocaleString()}</p>
+
+        {result?.isNewBest ? (
+          <p className="badge-new-best rounded-full px-5 py-1.5 text-sm font-black uppercase tracking-widest text-zinc-950">
+            New best!
+          </p>
+        ) : (
+          <p className="text-sm uppercase tracking-widest text-white/50">
+            Best <span className="ml-2 text-xl font-bold tabular-nums text-white">{best.toLocaleString()}</span>
+          </p>
+        )}
+
+        {stats && (
+          <div className="grid w-full grid-cols-3 gap-2">
+            <Stat label="Perfect" value={stats.perfect} tone="hsl(48 100% 70%)" />
+            <Stat label="Good" value={stats.good} tone="hsl(160 90% 65%)" />
+            <Stat label="Ok" value={stats.ok} tone="hsl(215 90% 75%)" />
+            <Stat label="Best chain" value={stats.maxChain} />
+            <Stat label="Tiles" value={stats.tiles} />
+            <Stat label="Laps" value={stats.laps} />
+          </div>
+        )}
+
+        {standing}
+
+        <div className="mt-1 flex w-full flex-col gap-3">
+          <button
+            ref={restartRef}
+            type="button"
+            onClick={onRestart}
+            disabled={!ready}
+            className="btn-primary rounded-full px-10 py-4 text-lg font-extrabold text-white"
+          >
+            Play again
+          </button>
+          <button
+            type="button"
+            onClick={onMenu}
+            disabled={!ready}
+            className="btn-ghost rounded-full px-10 py-3 text-base font-bold text-white/90"
+          >
+            Choose another song
+          </button>
+        </div>
       </div>
     </div>
   );

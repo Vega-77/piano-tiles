@@ -7,8 +7,6 @@ interface JobStatusProps {
   added: ChartFile | null;
   /** False when this browser can't keep songs. */
   persistent: boolean;
-  /** Whether someone is signed in, so the songs are kept in their cloud too. */
-  synced?: boolean;
   onCancel: () => void;
   onDismiss: () => void;
   /** Given the song just added, opens the screen to tune it; leave out to show no button. */
@@ -16,7 +14,7 @@ interface JobStatusProps {
 }
 
 /** What is being done to a song, or just was: progress with a way to stop it, the new song, or what went wrong. */
-export function JobStatus({ working, error, added, persistent, synced = false, onCancel, onDismiss, onTune }: JobStatusProps) {
+export function JobStatus({ working, error, added, persistent, onCancel, onDismiss, onTune }: JobStatusProps) {
   if (working) {
     return (
       <div role="status" className="rise-in mx-4 mb-2 rounded-2xl bg-white/10 p-3 text-sm ring-1 ring-white/15">
@@ -78,7 +76,7 @@ export function JobStatus({ working, error, added, persistent, synced = false, o
           ))}
           <p className="mt-1 text-xs text-white/55">
             {persistent
-              ? `Saved on this device${synced ? ' and on its way to your other devices' : ''}. If the tiles don’t feel right, tune the song.`
+              ? 'Saved on this device, for you only until you publish it. If the tiles don’t feel right, tune the song.'
               : 'This browser can’t keep songs, so it is gone when you close the page.'}
           </p>
         </div>

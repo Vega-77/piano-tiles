@@ -11,13 +11,11 @@ interface ImportPanelProps {
   busy: boolean;
   /** False when this browser can't keep songs (a private window, say): they last until the page closes. */
   persistent: boolean;
-  /** Whether someone is signed in, so a song added here turns up on their other devices. */
-  synced?: boolean;
   onFile: (file: File) => void;
 }
 
 /** The way to add a song: a drop zone. The listening is done here, in the browser; tuning comes after. */
-export function ImportPanel({ busy, persistent, synced = false, onFile }: ImportPanelProps) {
+export function ImportPanel({ busy, persistent, onFile }: ImportPanelProps) {
   const input = useRef<HTMLInputElement>(null);
 
   const chosen = (event: ChangeEvent<HTMLInputElement>) => {
@@ -40,8 +38,7 @@ export function ImportPanel({ busy, persistent, synced = false, onFile }: Import
         </svg>
         <span className="font-bold">Add your own song</span>
         <span className="text-xs text-white/50">
-          Choose or drop an mp4 or an audio file.{' '}
-          {synced ? 'It is added to your account, so it turns up on your other devices.' : 'It stays on this device.'}
+          Choose or drop an mp4 or an audio file. It stays on this device until you publish it.
         </span>
       </button>
 

@@ -1,4 +1,8 @@
 import { useCallback, useRef, useState } from 'react';
+import { CloudError, describeCloudError } from '../cloud/errors';
+import { firebaseBackend } from '../cloud/firebase';
+import { publishSong, unpublishSong } from '../cloud/publish';
+import type { CloudBackend } from '../cloud/types';
 import type { ChartFile } from '../songs/chart';
 import {
   addSong,
@@ -12,6 +16,7 @@ import {
   type RechartOptions,
   type TuneOptions,
 } from '../songs/importer';
+import { getSongStore } from '../songs/store';
 
 /** What is being worked on, the latest thing the analyser said about it, and how far along it is (0 to 1). */
 export interface Working {
@@ -32,19 +37,30 @@ function saveToDevice(blob: Blob, filename: string) {
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
+/** Runs a job that goes through the cloud, so that whatever the cloud says no to reads as words (the jobs here only know their own errors). */
+async function viaCloud<T>(job: () => Promise<T>): Promise<T> {
+  try {
+    return await job();
+  } catch (failure) {
+    if (failure instanceof Cancelled || failure instanceof ImportError || failure instanceof CloudError) throw failure;
+    console.error('A job with the cloud failed', failure);
+    throw new CloudError(describeCloudError(failure) ?? 'Something went wrong with the cloud.');
+  }
+}
+
 /**
  * Adding, tuning, exporting and removing songs, one job at a time, all inside this browser.
- * `refresh` reads the library again once a job has changed it, and `changed` (if given) is told
- * so the songs can be synced.
+ * `refresh` reads the library again once a job has changed it. Publishing and unpublishing (for an
+ * admin) also go through the cloud `backend`.
  */
-export function useImporter(refresh: () => Promise<void>, changed?: () => void) {
+export function useImporter(refresh: () => Promise<void>, backend: CloudBackend = firebaseBackend) {
   const [working, setWorking] = useState<Working | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [added, setAdded] = useState<ChartFile | null>(null);
   const running = useRef<AbortController | null>(null);
 
   const run = useCallback(
-    async <T>(what: string, task: (job: Job) => Promise<T>, changesSongs = true): Promise<T | undefined> => {
+    async <T>(what: string, task: (job: Job) => Promise<T>): Promise<T | undefined> => {
       if (running.current) return undefined;
       const controller = new AbortController();
       running.current = controller;
@@ -56,11 +72,10 @@ export function useImporter(refresh: () => Promise<void>, changed?: () => void) 
           onStage: (stage) => setWorking({ what, stage: stage.message, fraction: stage.fraction }),
         });
         await refresh();
-        if (changesSongs) changed?.();
         return result;
       } catch (failure) {
         if (!(failure instanceof Cancelled)) {
-          setError(failure instanceof ImportError ? failure.message : 'Something went wrong.');
+          setError(failure instanceof ImportError || failure instanceof CloudError ? failure.message : 'Something went wrong.');
         }
         return undefined;
       } finally {
@@ -68,7 +83,7 @@ export function useImporter(refresh: () => Promise<void>, changed?: () => void) 
         setWorking(null);
       }
     },
-    [refresh, changed],
+    [refresh],
   );
 
   /**
@@ -108,10 +123,30 @@ export function useImporter(refresh: () => Promise<void>, changed?: () => void) 
   /** Saves the song, its audio and its tuning as one file, to be added on another device. */
   const save = useCallback(
     async (id: string) => {
-      const file = await run('Saving the song file', async () => exportSong(id), false);
+      const file = await run('Saving the song file', async () => exportSong(id));
       if (file) saveToDevice(file.blob, file.filename);
     },
     [run],
+  );
+
+  /** Publishes the song for everyone, or brings what is published up to date with it. Resolves with the song as kept here now, or undefined if it failed or was cancelled. */
+  const publish = useCallback(
+    (id: string) =>
+      run('Publishing', (job) =>
+        viaCloud(async () =>
+          publishSong(id, await getSongStore(), await backend.catalog(), {
+            signal: job.signal,
+            progress: (fraction) => job.onStage?.({ message: 'Uploading the audio', fraction: 0.05 + 0.9 * fraction }),
+          }),
+        ),
+      ),
+    [run, backend],
+  );
+
+  /** Takes the song down for everyone (it stays here as a draft). */
+  const unpublish = useCallback(
+    (id: string) => run('Taking the song down', () => viaCloud(async () => unpublishSong(id, await getSongStore(), await backend.catalog()))),
+    [run, backend],
   );
 
   const cancel = useCallback(() => running.current?.abort(), []);
@@ -120,5 +155,5 @@ export function useImporter(refresh: () => Promise<void>, changed?: () => void) 
     setAdded(null);
   }, []);
 
-  return { working, error, added, add, rechart, tune, remove, save, cancel, dismiss };
+  return { working, error, added, add, rechart, tune, remove, save, publish, unpublish, cancel, dismiss };
 }

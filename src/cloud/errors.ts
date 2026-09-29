@@ -10,7 +10,7 @@ const OFFLINE = "Couldn't reach the cloud. Check the connection; it tries again 
 
 const BY_CODE: Readonly<Record<string, string>> = {
   'permission-denied':
-    "The cloud database said no. Its rules may not be set up yet, or this Google account isn't the one allowed to use it.",
+    "The cloud database said no. Its rules may not be published yet, or this account isn't allowed to do that.",
   unauthenticated: 'The sign-in has run out. Sign in again.',
   'resource-exhausted': "The free limit of the cloud database is used up for today. Try again tomorrow.",
   unavailable: OFFLINE,
@@ -19,7 +19,7 @@ const BY_CODE: Readonly<Record<string, string>> = {
   'auth/popup-blocked': 'Your browser blocked the sign-in window. Allow pop-ups for this site, then try again.',
   'auth/unauthorized-domain':
     "This site's address isn't on the sign-in allow list yet (Firebase console, Authentication, Settings, Authorized domains).",
-  'auth/operation-not-allowed': "Google sign-in isn't switched on in the Firebase console yet.",
+  'auth/operation-not-allowed': "This kind of sign-in (Google or guest) isn't switched on in the Firebase console yet (Authentication, Sign-in method).",
   'auth/too-many-requests': 'Too many sign-in tries. Wait a little, then try again.',
   'auth/user-disabled': 'This account has been switched off.',
 };

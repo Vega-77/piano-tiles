@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Cancelled } from '../songs/errors';
 import { fakeChart } from '../songs/testing';
 import { CloudError } from './errors';
-import { createFirestoreSongs, PART_BYTES, type FirestoreSdk } from './firestore';
+import { createFirestoreCatalog, PART_BYTES, type FirestoreSdk } from './catalog';
 
 class FakeBytes {
   constructor(private readonly data: Uint8Array) {}
@@ -36,7 +36,7 @@ function fakeFirestore() {
         .map(([path, data]) => ({ id: path.split('/').at(-1)!, data: () => data })),
     }),
   };
-  const songs = createFirestoreSongs(sdk as unknown as FirestoreSdk, {} as Firestore, 'u1');
+  const songs = createFirestoreCatalog(sdk as unknown as FirestoreSdk, {} as Firestore);
   return { docs, sdk, songs };
 }
 
@@ -52,7 +52,7 @@ const chart = fakeChart('a', { savedAt: 500, audio: 'a-1.mp3' });
 
 afterEach(() => vi.useRealTimers());
 
-describe('songs in Firestore', () => {
+describe('the published songs in Firestore', () => {
   it('keeps the audio in pieces that fit a document, beside the song', async () => {
     const { docs, songs } = fakeFirestore();
     const bytes = sound(2 * PART_BYTES + 1234);
@@ -62,10 +62,10 @@ describe('songs in Firestore', () => {
 
     expect(audio).toEqual({ name: 'a-1.mp3', type: 'audio/mpeg', size: bytes.length, parts: 3 });
     expect([...docs.keys()].sort()).toEqual([
-      'users/u1/songs/a',
-      'users/u1/songs/a/parts/a-1.mp3-0',
-      'users/u1/songs/a/parts/a-1.mp3-1',
-      'users/u1/songs/a/parts/a-1.mp3-2',
+      'songs/a',
+      'songs/a/parts/a-1.mp3-0',
+      'songs/a/parts/a-1.mp3-1',
+      'songs/a/parts/a-1.mp3-2',
     ]);
   });
 
@@ -76,7 +76,7 @@ describe('songs in Firestore', () => {
 
     const found = await songs.list();
 
-    expect(found).toEqual([{ id: 'a', savedAt: 500, deleted: false, chart, audio }]);
+    expect(found).toEqual([{ id: 'a', savedAt: 500, chart, audio }]);
   });
 
   it('gets the same audio back, piece by piece, reporting how far it has got', async () => {
@@ -105,56 +105,60 @@ describe('songs in Firestore', () => {
     const { docs, songs } = fakeFirestore();
     const audio = await songs.putAudio('a', 'a-1.mp3', blobOf(sound(10)));
     await songs.putSong(chart, audio);
-    docs.set('users/u1/songs/bad-json', { savedAt: 1, deleted: false, json: '{nope', audioName: 'x', audioType: 't', audioSize: 1, audioParts: 1 });
-    docs.set('users/u1/songs/wrong-id', { ...docs.get('users/u1/songs/a')! });
-    docs.set('users/u1/songs/no-time', { deleted: false });
-    docs.set('users/u1/songs/junk', 'not a record' as unknown as Record<string, unknown>);
+    docs.set('songs/bad-json', { savedAt: 1, json: '{nope', audioName: 'x', audioType: 't', audioSize: 1, audioParts: 1 });
+    docs.set('songs/wrong-id', { ...docs.get('songs/a')! });
+    docs.set('songs/no-time', { json: '{}' });
+    docs.set('songs/junk', 'not a record' as unknown as Record<string, unknown>);
 
     expect((await songs.list()).map((song) => song.id)).toEqual(['a']);
   });
 
-  it('marks a removal with a note first, then clears the audio away', async () => {
+  it('takes the song down first, then clears its audio away', async () => {
     const { docs, sdk, songs } = fakeFirestore();
     const audio = await songs.putAudio('a', 'a-1.mp3', blobOf(sound(PART_BYTES + 1)));
     await songs.putSong(chart, audio);
-    sdk.setDoc.mockClear();
 
-    await songs.remove('a', 900, audio);
+    await songs.remove('a', audio);
 
-    expect(sdk.setDoc).toHaveBeenCalledTimes(1);
-    expect([...docs.keys()]).toEqual(['users/u1/songs/a']);
-    expect(await songs.list()).toEqual([{ id: 'a', savedAt: 900, deleted: true, chart: null, audio: null }]);
+    expect(sdk.deleteDoc.mock.calls[0]?.[0]).toEqual({ path: 'songs/a' });
+    expect([...docs.keys()]).toEqual([]);
+    expect(await songs.list()).toEqual([]);
   });
 
   it('still counts a song as removed when its pieces will not go', async () => {
-    const { sdk, songs } = fakeFirestore();
+    const { docs, sdk, songs } = fakeFirestore();
     const audio = await songs.putAudio('a', 'a-1.mp3', blobOf(sound(10)));
     await songs.putSong(chart, audio);
-    sdk.deleteDoc.mockRejectedValue(new Error('offline'));
+    const real = sdk.deleteDoc.getMockImplementation()!;
+    sdk.deleteDoc.mockImplementation(async (ref: Ref) => {
+      if (ref.path.includes('/parts/')) throw new Error('offline');
+      await real(ref);
+    });
 
-    await expect(songs.remove('a', 900, audio)).resolves.toBeUndefined();
-    expect((await songs.list())[0]).toMatchObject({ deleted: true, savedAt: 900 });
+    await expect(songs.remove('a', audio)).resolves.toBeUndefined();
+    expect(await songs.list()).toEqual([]);
+    expect([...docs.keys()]).toEqual(['songs/a/parts/a-1.mp3-0']);
   });
 
-  it('drops only the audio it is told to, leaving another version alone', async () => {
-    const { docs, songs } = fakeFirestore();
-    const old = await songs.putAudio('a', 'a-1.mp3', blobOf(sound(PART_BYTES + 1)));
-    await songs.putAudio('a', 'a-2.mp3', blobOf(sound(10)));
+  it('does not clear the audio of a song that would not come down', async () => {
+    const { docs, sdk, songs } = fakeFirestore();
+    const audio = await songs.putAudio('a', 'a-1.mp3', blobOf(sound(10)));
+    await songs.putSong(chart, audio);
+    sdk.deleteDoc.mockRejectedValue(Object.assign(new Error('no'), { code: 'permission-denied' }));
 
-    await songs.dropAudio('a', old);
-
-    expect([...docs.keys()]).toEqual(['users/u1/songs/a/parts/a-2.mp3-0']);
+    await expect(songs.remove('a', audio)).rejects.toMatchObject({ code: 'permission-denied' });
+    expect([...docs.keys()].sort()).toEqual(['songs/a', 'songs/a/parts/a-1.mp3-0']);
   });
 
   it('says when a piece is missing or the song comes back the wrong size', async () => {
     const { docs, songs } = fakeFirestore();
     const audio = await songs.putAudio('a', 'a-1.mp3', blobOf(sound(2 * PART_BYTES)));
 
-    docs.delete('users/u1/songs/a/parts/a-1.mp3-1');
+    docs.delete('songs/a/parts/a-1.mp3-1');
     await expect(songs.getAudio('a', audio)).rejects.toBeInstanceOf(CloudError);
 
-    docs.set('users/u1/songs/a/parts/a-1.mp3-1', { data: FakeBytes.fromUint8Array(sound(5)) });
-    await expect(songs.getAudio('a', audio)).rejects.toThrow(/incomplete/);
+    docs.set('songs/a/parts/a-1.mp3-1', { data: FakeBytes.fromUint8Array(sound(5)) });
+    await expect(songs.getAudio('a', audio)).rejects.toThrow(/not all in the cloud/);
   });
 
   it('takes a write that is never answered for a lost connection', async () => {

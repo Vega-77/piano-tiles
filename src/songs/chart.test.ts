@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { TILE_HEIGHT } from '../config';
 import type { Song } from '../types';
-import { chartRows, formatChart, parseChart, playOffset, rowSeconds, songFromChart, validateChart, type ChartFile } from './chart';
+import { chartRows, formatChart, parseChart, playOffset, publicationOf, rowSeconds, songFromChart, validateChart, type ChartFile } from './chart';
 import { beatRows } from './notation';
 
 const rowsOf = (source: string) => parseChart(source).reduce((sum, beat) => sum + beatRows(beat), 0);
@@ -162,6 +162,7 @@ describe('making a song from a chart', () => {
       level: 'medium',
       length: 'medium',
       confidence: undefined,
+      publication: 'draft',
       warnings: [],
     });
 
@@ -183,6 +184,7 @@ describe('making a song from a chart', () => {
       level: 'hard',
       length: 'long',
       confidence: 0.8,
+      publication: 'draft',
       warnings: ['Very fast.'],
     });
 
@@ -270,5 +272,22 @@ describe('the sync nudge', () => {
     expect(validateChart(chartFile({ nudge: 0.25 })).nudge).toBe(0.25);
     expect(() => validateChart(chartFile({ nudge: 0.75 }))).toThrow(/nudge/);
     expect(() => validateChart({ ...chartFile(), nudge: 'lots' })).toThrow(/nudge/);
+  });
+});
+
+describe('where a song stands with the published songs', () => {
+  const folder = 'https://example.test/songs/demo/';
+
+  it('is a draft until published, changed once it is saved after that, and live while it is as published', () => {
+    expect(publicationOf({ savedAt: 5 })).toBe('draft');
+    expect(publicationOf({})).toBe('draft');
+    expect(publicationOf({ savedAt: 5, publishedAt: 5 })).toBe('live');
+    expect(publicationOf({ savedAt: 9, publishedAt: 5 })).toBe('changed');
+    expect(publicationOf({ savedAt: 4, publishedAt: 5 })).toBe('live');
+  });
+
+  it('is shown for the song made from the chart', () => {
+    expect(songFromChart(chartFile({ savedAt: 8, publishedAt: 8 }), folder).imported?.publication).toBe('live');
+    expect(songFromChart(chartFile({ savedAt: 9, publishedAt: 8 }), folder).imported?.publication).toBe('changed');
   });
 });

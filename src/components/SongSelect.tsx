@@ -83,17 +83,25 @@ function DifficultyPips({ level }: { level: number }) {
   );
 }
 
-function Badge({ children, tone }: { children: string; tone: 'double' | 'hold' | 'imported' }) {
+type BadgeTone = 'double' | 'hold' | 'imported' | 'draft' | 'changed' | 'live';
+
+const BADGE_STYLES: Record<BadgeTone, CSSProperties> = {
+  double: { background: 'hsl(var(--hue) 100% 60% / 0.2)', color: 'hsl(var(--hue) 100% 82%)' },
+  hold: { background: 'hsl(40 100% 55% / 0.2)', color: 'hsl(45 100% 75%)' },
+  imported: { background: 'hsl(0 0% 100% / 0.12)', color: 'hsl(0 0% 100% / 0.75)' },
+  draft: { background: 'hsl(0 0% 100% / 0.12)', color: 'hsl(0 0% 100% / 0.75)' },
+  changed: { background: 'hsl(35 100% 55% / 0.22)', color: 'hsl(40 100% 78%)' },
+  live: { background: 'hsl(150 80% 45% / 0.22)', color: 'hsl(150 90% 78%)' },
+};
+
+/** What an admin sees on a song of their own about where it stands with the published songs. */
+const PUBLICATION_LABELS = { draft: 'Draft', changed: 'Unpublished changes', live: 'Published' } as const;
+
+function Badge({ children, tone }: { children: string; tone: BadgeTone }) {
   return (
     <span
       className="rounded-full px-2 py-0.5 text-[0.65rem] font-bold uppercase tracking-wider"
-      style={
-        tone === 'hold'
-          ? { background: 'hsl(40 100% 55% / 0.2)', color: 'hsl(45 100% 75%)' }
-          : tone === 'imported'
-            ? { background: 'hsl(0 0% 100% / 0.12)', color: 'hsl(0 0% 100% / 0.75)' }
-            : { background: 'hsl(var(--hue) 100% 60% / 0.2)', color: 'hsl(var(--hue) 100% 82%)' }
-      }
+      style={BADGE_STYLES[tone]}
     >
       {children}
     </span>
@@ -105,13 +113,16 @@ interface SongCardProps {
   index: number;
   stats: SongStats | undefined;
   selected: boolean;
+  /** Whether to say where the song stands with the published songs (for someone who publishes them). */
+  showPublication: boolean;
   onSelect: () => void;
 }
 
-function SongCard({ song, index, stats, selected, onSelect }: SongCardProps) {
+function SongCard({ song, index, stats, selected, showPublication, onSelect }: SongCardProps) {
   const best = stats?.best ?? 0;
   const plays = stats?.plays ?? 0;
   const features = songFeatures(song);
+  const publication = showPublication ? song.imported?.publication : undefined;
   return (
     <button
       type="button"
@@ -135,9 +146,10 @@ function SongCard({ song, index, stats, selected, onSelect }: SongCardProps) {
           {Math.round(song.bpm)} BPM · {Math.round(songBars(song))} bars · {formatDuration(songSeconds(song))}
         </p>
 
-        {(features.doubles || features.holds || song.recording) && (
+        {(features.doubles || features.holds || song.recording || publication) && (
           <div className="mt-1.5 flex flex-wrap gap-1">
-            {song.recording && <Badge tone="imported">Recording</Badge>}
+            {publication && <Badge tone={publication}>{PUBLICATION_LABELS[publication]}</Badge>}
+            {song.recording && !publication && <Badge tone="imported">Recording</Badge>}
             {features.doubles && <Badge tone="double">Doubles</Badge>}
             {features.holds && <Badge tone="hold">Holds</Badge>}
           </div>
@@ -176,13 +188,23 @@ interface SongSelectProps {
   onPlay: (id: string) => void;
   /** The song being fetched before it can start, and why one couldn't be. */
   loadingId?: string | null;
+  /** How much of that song's audio has arrived (0 to 1), when it is being downloaded. */
+  loadProgress?: number | null;
   loadError?: string | null;
   /** Songs that were found but couldn't be loaded, in words. */
   problems?: readonly string[];
   /** Given a file dropped on the menu; leave out to turn dropping off. */
   onDropFile?: (file: File) => void;
-  /** Under the title: signing in to sync the songs to other devices. */
-  cloud?: ReactNode;
+  /** Whether the player adds and publishes songs, so the list says where each stands and an empty one asks for a first song. */
+  admin?: boolean;
+  /** What to say in place of the songs while there are none to show (for a player who can't add them). */
+  empty?: ReactNode;
+  /** Under the title: who is playing, and the way to sign in. */
+  account?: ReactNode;
+  /** Under the selected song, when it is a published one: its leaderboard. */
+  board?: (song: Song) => ReactNode;
+  /** Under the songs: why the published songs couldn't be looked at. */
+  notice?: ReactNode;
   /** Below the songs: the way to add one. */
   adder?: ReactNode;
   /** Above the Play button: progress or the result of adding a song. */
@@ -201,10 +223,15 @@ export function SongSelect({
   onSelect,
   onPlay,
   loadingId = null,
+  loadProgress = null,
   loadError = null,
   problems = [],
   onDropFile,
-  cloud,
+  admin = false,
+  empty,
+  account,
+  board,
+  notice,
   adder,
   status,
   onTune,
@@ -256,21 +283,23 @@ export function SongSelect({
       <header className="rise-in px-5 pb-3 pt-[max(1.5rem,env(safe-area-inset-top))] text-center">
         <h1 className="title-gradient text-4xl font-black tracking-tight">Piano Tiles</h1>
         <p className="mt-1 text-sm text-white/60">
-          {songs.length > 0 ? 'Choose a song' : ready ? 'Add your first song' : ' '}
+          {songs.length > 0 ? 'Choose a song' : ready && admin ? 'Add your first song' : ' '}
         </p>
-        {cloud}
+        {account}
       </header>
 
       <ul ref={list} className="song-list flex-1 space-y-3 overflow-y-auto px-4 pb-4">
         {songs.length === 0 && (
           <li className="rounded-2xl bg-white/5 px-4 py-6 text-center text-sm leading-snug text-white/65 ring-1 ring-white/10">
-            {ready ? (
+            {!ready ? (
+              <p role="status">Loading the songs…</p>
+            ) : admin ? (
               <>
                 <p className="font-bold text-white">No songs yet</p>
                 <p className="mt-1">Add one below: an mp4, an audio file or a song file. The tiles are made to match its beat.</p>
               </>
             ) : (
-              <p role="status">Loading your songs…</p>
+              (empty ?? <p className="font-bold text-white">No songs yet</p>)
             )}
           </li>
         )}
@@ -281,8 +310,10 @@ export function SongSelect({
               index={index}
               stats={stats[song.id]}
               selected={song.id === selected?.id}
+              showPublication={admin}
               onSelect={() => onSelect(song.id)}
             />
+            {song.id === selected?.id && board?.(song)}
             {song.id === selected?.id && song.imported && onTune && (
               <button
                 type="button"
@@ -305,6 +336,7 @@ export function SongSelect({
             ))}
           </li>
         )}
+        {notice && <li>{notice}</li>}
         {adder && <li>{adder}</li>}
       </ul>
 
@@ -331,7 +363,13 @@ export function SongSelect({
                   <path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5Z" />
                 </svg>
               )}
-              <span className="truncate">{loading ? 'Loading the song…' : `Play ${selected.title}`}</span>
+              <span className="truncate">
+                {loading
+                  ? loadProgress !== null
+                    ? `Downloading the song… ${Math.round(loadProgress * 100)}%`
+                    : 'Loading the song…'
+                  : `Play ${selected.title}`}
+              </span>
             </button>
             <p className="mt-2 hidden text-center text-xs text-white/40 pointer-fine:block">
               Keyboard: D · F · J · K &nbsp;·&nbsp; Esc to pause

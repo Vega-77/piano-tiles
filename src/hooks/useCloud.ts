@@ -1,207 +1,152 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { describeCloudError } from '../cloud/errors';
+import { CloudError, describeCloudError } from '../cloud/errors';
 import { firebaseBackend } from '../cloud/firebase';
-import { removalLog, type RemovalLog } from '../cloud/removals';
-import { runSync, type Skipped } from '../cloud/sync';
-import type { CloudAccount, CloudBackend } from '../cloud/types';
-import { Cancelled } from '../songs/errors';
-import { getSongStore, type SongStore } from '../songs/store';
+import { parseName } from '../cloud/names';
+import type { CloudAccount, CloudBackend, Score, Standing } from '../cloud/types';
 
-const REMEMBER = 'piano-tiles-cloud';
-
-/** Whether this browser was signed in last time, which is when Firebase is worth loading before anyone asks for it. */
-function wasSignedIn(): boolean {
-  try {
-    return localStorage.getItem(REMEMBER) === '1';
-  } catch {
-    return false;
-  }
+/** A song's leaderboard as it is shown: the best few, and where the player stands (if they have a place). */
+export interface Board {
+  top: Score[];
+  mine?: Standing;
 }
 
-function remember(signedIn: boolean) {
-  try {
-    if (signedIn) localStorage.setItem(REMEMBER, '1');
-    else localStorage.removeItem(REMEMBER);
-  } catch {
-    // Not fatal: the next visit just waits to be asked to sign in.
-  }
+/** What a run brings to the board. */
+export interface RunScore {
+  score: number;
+  laps: number;
+  chain: number;
 }
 
-/** How long after the last change to wait before syncing, so a run of changes is one sync. */
-const CHANGE_DELAY_MS = 1500;
-/** Coming back to the page syncs again if the last one was longer ago than this (another device may have changed something). */
-const RETURN_AFTER_MS = 60_000;
+/** How many places are shown. */
+export const BOARD_SIZE = 10;
+
+/** A board looked at again within this long is not fetched again: each look costs a dozen reads of the free daily allowance. */
+const FRESH_MS = 3 * 60_000;
 
 export interface CloudOptions {
-  /** Reads the library again, once a sync has changed what is on this device. */
-  refresh: () => Promise<void>;
   backend?: CloudBackend;
-  store?: () => Promise<SongStore>;
-  removals?: RemovalLog;
-  /** Whether to start by finding out who is signed in (by default, if they were last time). */
-  restore?: boolean;
 }
 
 /**
- * Signing in with Google and keeping the songs in step with the account's cloud copy. Nothing
- * happens until the player signs in, and Firebase isn't even loaded until then (or, for someone
- * who was signed in last time, until the page opens).
+ * Who is playing: a guest with a nickname of their own, or a Google account. Nothing is asked of
+ * anyone until they choose a nickname after a run (that is when a guest account is made), and
+ * Firebase is loaded at once so the published songs are there, but nobody is signed in by it.
  */
-export function useCloud({ refresh, backend = firebaseBackend, store = getSongStore, removals = removalLog, restore }: CloudOptions) {
+export function useCloud({ backend = firebaseBackend }: CloudOptions = {}) {
   const [account, setAccount] = useState<CloudAccount | null>(null);
-  const [restoring, setRestoring] = useState(false);
+  /** The nickname: undefined while not known yet, null if there is none. */
+  const [nickname, setNickname] = useState<string | null | undefined>(undefined);
+  const [admin, setAdmin] = useState(false);
+  /** Finding out who is signed in, which takes a moment after the page opens. */
+  const [checking, setChecking] = useState(true);
   const [signingIn, setSigningIn] = useState(false);
-  /** What is being sent or fetched, in words; null when nothing is. */
-  const [syncing, setSyncing] = useState<string | null>(null);
-  const [lastSynced, setLastSynced] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
-  /** Songs that stay on this device only. */
-  const [notes, setNotes] = useState<readonly Skipped[]>([]);
 
-  // What the callbacks need to be able to read without being remade each time.
-  const who = useRef<CloudAccount | null>(null);
-  const running = useRef(false);
-  const again = useRef(false);
-  const controller = useRef<AbortController | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const lastAt = useRef(0);
+  const latest = useRef({ backend, account, nickname });
+  latest.current = { backend, account, nickname };
+  const boards = useRef(new Map<string, { at: number; board: Board }>());
   const stopWatching = useRef<(() => void) | null>(null);
-  const latest = useRef({ backend, store, removals, refresh });
-  latest.current = { backend, store, removals, refresh };
-
-  const sync = useCallback(async () => {
-    if (!who.current) return;
-    if (running.current) {
-      again.current = true; // (something changed while a sync was going: go round once more)
-      return;
-    }
-    running.current = true;
-    const mine = new AbortController();
-    controller.current = mine;
-    try {
-      do {
-        again.current = false;
-        const account = who.current;
-        if (!account || mine.signal.aborted) break;
-        setError(null);
-        setSyncing('Checking the cloud');
-        const { backend, store, removals, refresh } = latest.current;
-        const report = await runSync({
-          store: await store(),
-          cloud: await backend.songs(account),
-          removals,
-          onProgress: (message) => {
-            if (!mine.signal.aborted) setSyncing(message);
-          },
-          signal: mine.signal,
-        });
-        if (mine.signal.aborted) break;
-        lastAt.current = Date.now();
-        setLastSynced(lastAt.current);
-        setNotes(report.skipped);
-        if (report.pulled.length > 0 || report.removedHere.length > 0) await refresh();
-      } while (again.current);
-    } catch (failure) {
-      if (!(failure instanceof Cancelled) && !mine.signal.aborted) {
-        console.error('Syncing with the cloud failed', failure);
-        setError(describeCloudError(failure) ?? null);
-      }
-    } finally {
-      running.current = false;
-      if (controller.current === mine) controller.current = null;
-      if (!mine.signal.aborted) setSyncing(null);
-      // A sync asked for while this one was being stopped (a new sign-in) still has to happen.
-      if (again.current && who.current) {
-        again.current = false;
-        void sync();
-      }
-    }
-  }, []);
-
-  /** Syncs a moment from now (a run of changes makes one sync). Does nothing if nobody is signed in. */
-  const syncSoon = useCallback(() => {
-    if (!who.current) return;
-    clearTimeout(timer.current);
-    timer.current = setTimeout(() => void sync(), CHANGE_DELAY_MS);
-  }, [sync]);
 
   const watch = useCallback(() => {
     if (stopWatching.current) return;
-    stopWatching.current = latest.current.backend.watch(
+    const stop = latest.current.backend.watch(
       (next) => {
-        who.current = next;
-        remember(next !== null);
         setAccount(next);
-        setRestoring(false);
+        setChecking(false);
       },
       (failure) => {
-        console.error('Signing in failed', failure);
-        setError(describeCloudError(failure) ?? null);
-        setRestoring(false);
+        // (Not shown: offline, the songs already here play all the same, and coming back online tries again.)
+        console.error('Finding out who is signed in failed', failure);
+        stop();
+        if (stopWatching.current === stop) stopWatching.current = null;
+        setChecking(false);
       },
     );
+    stopWatching.current = stop;
   }, []);
 
-  // Someone who was signed in last time is found again as the page opens.
-  const shouldRestore = restore ?? wasSignedIn();
   useEffect(() => {
-    if (!shouldRestore) return;
-    setRestoring(true);
+    latest.current.backend.warmUp();
     watch();
-  }, [shouldRestore, watch]);
-
-  useEffect(
-    () => () => {
+    window.addEventListener('online', watch);
+    return () => {
+      window.removeEventListener('online', watch);
       stopWatching.current?.();
       stopWatching.current = null;
-      controller.current?.abort();
-      clearTimeout(timer.current);
-    },
-    [],
-  );
+    };
+  }, [watch]);
 
-  // While signed in: sync now, when the connection comes back, and when the player returns to the page.
+  // Whose nickname and boards these are changes with the account, not with a guest becoming a Google account (which keeps its id).
   const uid = account?.uid;
+  const guest = account?.guest;
   useEffect(() => {
+    boards.current.clear();
     if (uid === undefined) {
-      setSyncing(null);
-      setLastSynced(null);
-      setNotes([]);
+      setNickname(undefined);
       return;
     }
-    void sync();
-    const online = () => void sync();
-    const visible = () => {
-      if (document.visibilityState === 'visible' && Date.now() - lastAt.current > RETURN_AFTER_MS) void sync();
-    };
-    window.addEventListener('online', online);
-    document.addEventListener('visibilitychange', visible);
+    let current = true;
+    setNickname(undefined);
+    latest.current.backend
+      .players()
+      .then((players) => players.name(uid))
+      // (A name taken while this was being read stays: a guest is signed in a moment before their nickname is claimed.)
+      .then((name) => current && setNickname((known) => known ?? name))
+      .catch((failure) => console.error('Reading the nickname failed', failure));
     return () => {
-      window.removeEventListener('online', online);
-      document.removeEventListener('visibilitychange', visible);
-      controller.current?.abort();
-      clearTimeout(timer.current);
+      current = false;
     };
-  }, [uid, sync]);
+  }, [uid]);
 
-  const signIn = useCallback(async () => {
+  // Only a Google account can be an admin, and it is found out by asking (the rules decide, not this).
+  useEffect(() => {
+    setAdmin(false);
+    if (uid === undefined || guest !== false) return;
+    let current = true;
+    latest.current.backend
+      .players()
+      .then((players) => players.isAdmin(uid))
+      .then((is) => current && setAdmin(is))
+      .catch((failure) => console.error('Checking for an admin failed', failure));
+    return () => {
+      current = false;
+    };
+  }, [uid, guest]);
+
+  /** Takes a nickname for good. Resolves with what is wrong with it, or null once it is theirs. Signs in as a guest first if nobody is. */
+  const claimName = useCallback(async (input: string): Promise<string | null> => {
+    try {
+      const name = parseName(input);
+      const { backend, account } = latest.current;
+      const who = account ?? (await backend.signInAsGuest());
+      await (await backend.players()).claim(who.uid, name);
+      setNickname(name);
+      return null;
+    } catch (failure) {
+      if (!(failure instanceof CloudError)) console.error('Taking the nickname failed', failure);
+      // (Whoever asked for a name has none yet, which is what the form is for; a guest made just now has not been read for one.)
+      setNickname((known) => known ?? null);
+      return describeCloudError(failure) ?? 'That name could not be taken.';
+    }
+  }, []);
+
+  const signInWithGoogle = useCallback(async () => {
     setError(null);
     setSigningIn(true);
-    watch();
     try {
-      await latest.current.backend.signIn();
+      await latest.current.backend.signInWithGoogle();
     } catch (failure) {
       const words = describeCloudError(failure);
-      if (words) setError(words);
-      if (words) console.error('Signing in failed', failure);
+      if (words) {
+        console.error('Signing in failed', failure);
+        setError(words);
+      }
     } finally {
       setSigningIn(false);
     }
-  }, [watch]);
+  }, []);
 
   const signOut = useCallback(async () => {
-    controller.current?.abort();
-    clearTimeout(timer.current);
     try {
       await latest.current.backend.signOut();
     } catch (failure) {
@@ -209,24 +154,44 @@ export function useCloud({ refresh, backend = firebaseBackend, store = getSongSt
     }
   }, []);
 
-  const warmUp = useCallback(() => latest.current.backend.warmUp(), []);
+  /** A song's leaderboard. Rejects if the cloud can't be reached. */
+  const loadBoard = useCallback(async (songId: string, fresh = false): Promise<Board> => {
+    const { backend, account } = latest.current;
+    const key = `${account?.uid ?? ''}|${songId}`;
+    const hit = boards.current.get(key);
+    if (!fresh && hit && Date.now() - hit.at < FRESH_MS) return hit.board;
+    const scores = await backend.scores();
+    const [top, mine] = await Promise.all([scores.top(songId, BOARD_SIZE), account ? scores.standing(songId, account.uid) : undefined]);
+    const board: Board = { top, mine };
+    boards.current.set(key, { at: Date.now(), board });
+    return board;
+  }, []);
+
+  /**
+   * Puts a finished run on a song's board (it only counts if it beats the player's best there) and
+   * resolves with the board as it is now. Rejects if it can't be done, and the run can be sent again.
+   */
+  const submit = useCallback(
+    async (songId: string, run: RunScore): Promise<Board & { improved: boolean }> => {
+      const { backend, account, nickname } = latest.current;
+      if (!account || !nickname) throw new CloudError('Choose a nickname first.');
+      const scores = await backend.scores();
+      const improved = await scores.submit(songId, {
+        uid: account.uid,
+        name: nickname,
+        score: Math.round(run.score),
+        laps: run.laps,
+        chain: run.chain,
+      });
+      boards.current.clear();
+      return { ...(await loadBoard(songId, true)), improved };
+    },
+    [loadBoard],
+  );
+
   const dismissError = useCallback(() => setError(null), []);
 
-  return {
-    account,
-    /** Finding out who was signed in, or the sign-in window is open. */
-    connecting: restoring || signingIn,
-    syncing,
-    lastSynced,
-    error,
-    notes,
-    signIn,
-    signOut,
-    syncNow: sync,
-    syncSoon,
-    warmUp,
-    dismissError,
-  };
+  return { account, nickname, admin, checking, signingIn, error, claimName, signInWithGoogle, signOut, loadBoard, submit, dismissError };
 }
 
 export type Cloud = ReturnType<typeof useCloud>;

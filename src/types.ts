@@ -120,6 +120,9 @@ export interface Recording {
   end?: number;
 }
 
+/** Whether a song is in the catalogue everybody plays: not yet (a draft), changed here since, or as published. */
+export type Publication = 'draft' | 'changed' | 'live';
+
 /** What a song made from a recording remembers about how it was charted, for the tuning panel. */
 export interface ImportInfo {
   /** The hand-set sync correction, in seconds (positive if the tiles land early against the music). */
@@ -133,6 +136,7 @@ export interface ImportInfo {
   /** 0–1: how well the detected beats fit the grid, when the analyser said. */
   confidence?: number;
   warnings: readonly string[];
+  publication: Publication;
 }
 
 export interface Song {

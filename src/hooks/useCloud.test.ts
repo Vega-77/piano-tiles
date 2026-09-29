@@ -1,241 +1,236 @@
-import { act, createElement } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createMemoryRemovals } from '../cloud/removals';
-import { createFakeBackend, type FakeBackend } from '../cloud/testing';
-import { createMemoryStore, type SongStore } from '../songs/store';
-import { fakeChart } from '../songs/testing';
-import { useCloud, type Cloud, type CloudOptions } from './useCloud';
+import { describe, expect, it } from 'vitest';
+import { createFakeBackend } from '../cloud/testing';
+import { CloudError } from '../cloud/errors';
+import { renderHook, settle } from './testing';
+import { useCloud } from './useCloud';
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
-let cloud: Cloud;
-function Probe(options: CloudOptions) {
-  cloud = useCloud(options);
-  return null;
+async function setup(prepare?: (backend: ReturnType<typeof createFakeBackend>) => void) {
+  const backend = createFakeBackend();
+  prepare?.(backend);
+  const view = await renderHook(() => useCloud({ backend }));
+  return { backend, ...view };
 }
 
-let mounted: Root[] = [];
-
-interface Setup {
-  backend: FakeBackend;
-  store: SongStore;
-  refresh: ReturnType<typeof vi.fn<() => Promise<void>>>;
-}
-
-/** Runs the hook against a fake sign-in and a cloud kept in memory. */
-async function mount({ signedIn = false, restore = false } = {}): Promise<Setup> {
-  const backend = createFakeBackend({ uid: 'u1', name: 'Pat' });
-  if (signedIn) backend.account = { uid: 'u1', name: 'Pat' };
-  const store = createMemoryStore();
-  const refresh = vi.fn(async () => undefined);
-  const root = createRoot(document.createElement('div'));
-  mounted.push(root);
-  await act(async () => {
-    root.render(createElement(Probe, { refresh, backend, store: async () => store, removals: createMemoryRemovals(), restore }));
-  });
-  return { backend, store, refresh };
-}
-
-/** Lets the sign-in, the sync and what follows them finish. */
-const settle = (ms = 20) =>
-  act(async () => {
-    await vi.advanceTimersByTimeAsync(ms);
-  });
-
-const song = (id: string, savedAt: number) => fakeChart(id, { savedAt, audio: `${id}-1.mp3` });
-const sound = () => new Blob([new Uint8Array(64)], { type: 'audio/mpeg' });
-
-beforeEach(() => {
-  vi.useFakeTimers();
-  localStorage.clear();
-  vi.spyOn(console, 'error').mockImplementation(() => undefined);
-});
-
-afterEach(async () => {
-  await act(async () => mounted.forEach((root) => root.unmount()));
-  mounted = [];
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-});
-
-describe('signing in to sync', () => {
-  it('does nothing, and loads nothing, until someone signs in', async () => {
-    const { backend } = await mount();
-    await settle();
-    expect(cloud.account).toBeNull();
-    expect(cloud.connecting).toBe(false);
-    expect(backend.warmed).toBe(0);
-    expect(backend.clouds.size).toBe(0);
-  });
-
-  it('warms the sign-in up when asked to', async () => {
-    const { backend } = await mount();
-    cloud.warmUp();
+describe('who is playing', () => {
+  it('starts with nobody, having started loading the cloud but signed nobody in', async () => {
+    const { backend, result } = await setup();
+    expect(result.current).toMatchObject({ account: null, nickname: undefined, admin: false, checking: false });
     expect(backend.warmed).toBe(1);
+    expect(backend.guests).toBe(0);
   });
 
-  it('sends the songs on this device up once signed in, and remembers the sign-in for next time', async () => {
-    const { backend, store } = await mount();
-    await store.save(song('a', 50), sound());
-
-    await act(async () => void cloud.signIn());
-    await settle();
-
-    expect(cloud.account).toEqual({ uid: 'u1', name: 'Pat' });
-    expect(cloud.syncing).toBeNull();
-    expect(cloud.lastSynced).not.toBeNull();
-    expect(cloud.error).toBeNull();
-    expect(backend.clouds.get('u1')!.songs.get('a')).toMatchObject({ savedAt: 50, deleted: false });
-    expect(localStorage.getItem('piano-tiles-cloud')).toBe('1');
+  it('finds the nickname of whoever is already signed in', async () => {
+    const { result } = await setup((backend) => {
+      backend.account = { uid: 'guest-9', name: 'Guest', guest: true };
+      backend.people.names.set('guest-9', 'Pat');
+    });
+    expect(result.current.account?.uid).toBe('guest-9');
+    expect(result.current.nickname).toBe('Pat');
   });
 
-  it('takes songs down from the cloud and has the library read again', async () => {
-    const { backend, store, refresh } = await mount();
-    const there = await backend.songs({ uid: 'u1', name: 'Pat' });
-    const audio = await there.putAudio('b', 'b-1.mp3', sound());
-    await there.putSong(song('b', 70), audio);
-
-    await act(async () => void cloud.signIn());
-    await settle();
-
-    expect(await store.chart('b')).toMatchObject({ id: 'b', savedAt: 70 });
-    expect((await store.audio('b'))!.size).toBe(64);
-    expect(refresh).toHaveBeenCalledTimes(1);
+  it('knows a signed-in nobody-in-particular has no nickname yet', async () => {
+    const { result } = await setup((backend) => {
+      backend.account = { uid: 'guest-9', name: 'Guest', guest: true };
+    });
+    expect(result.current.nickname).toBeNull();
   });
 
-  it('does not have the library read again when nothing came down', async () => {
-    const { store, refresh } = await mount();
-    await store.save(song('a', 50), sound());
-    await act(async () => void cloud.signIn());
-    await settle();
-    expect(refresh).not.toHaveBeenCalled();
+  it('finds out whether a Google account is an admin, and never asks for a guest', async () => {
+    const admin = await setup((backend) => {
+      backend.account = { uid: 'g1', name: 'Pat', guest: false };
+      backend.people.admins.add('g1');
+    });
+    expect(admin.result.current.admin).toBe(true);
+
+    const plain = await setup((backend) => {
+      backend.account = { uid: 'g2', name: 'Sam', guest: false };
+    });
+    expect(plain.result.current.admin).toBe(false);
+
+    const guest = await setup((backend) => {
+      backend.account = { uid: 'guest-1', name: 'Guest', guest: true };
+      backend.people.admins.add('guest-1');
+    });
+    expect(guest.result.current.admin).toBe(false);
+    expect(guest.backend.people.calls).not.toContain('isAdmin guest-1');
   });
 
-  it('finds someone who was signed in already, when the page opens', async () => {
-    await mount({ signedIn: true, restore: true });
-    await settle();
-    expect(cloud.connecting).toBe(false);
-    expect(cloud.account?.name).toBe('Pat');
-  });
-
-  it('forgets the sign-in, and stops syncing, on sign-out', async () => {
-    const { backend, store } = await mount();
-    await act(async () => void cloud.signIn());
-    await settle();
-
-    await act(async () => void cloud.signOut());
-    await settle();
-    expect(cloud.account).toBeNull();
-    expect(cloud.lastSynced).toBeNull();
-    expect(localStorage.getItem('piano-tiles-cloud')).toBeNull();
-
-    await store.save(song('late', 90), sound());
-    cloud.syncSoon();
-    await settle(5000);
-    expect(backend.clouds.get('u1')!.songs.has('late')).toBe(false);
+  it('stops listening when the page goes', async () => {
+    const { backend, unmount } = await setup();
+    await unmount();
+    backend.account = { uid: 'late', name: 'Late', guest: true };
+    await settle(() => window.dispatchEvent(new Event('online')));
+    expect(backend.guests).toBe(0);
   });
 });
 
-describe('syncing after a change', () => {
-  it('waits a moment, so a run of changes is one sync', async () => {
-    const { backend, store } = await mount({ signedIn: true, restore: true });
-    await settle();
-    const there = backend.clouds.get('u1')!;
-    there.calls.length = 0;
+describe('taking a nickname', () => {
+  it('makes a guest account for the player and gives the nickname to it', async () => {
+    const { backend, result } = await setup();
 
-    await store.save(song('a', 50), sound());
-    cloud.syncSoon();
-    await settle(500);
-    await store.save(song('b', 51), sound());
-    cloud.syncSoon();
-    await settle(1000);
-    expect(there.calls).toEqual([]); // (still waiting: the second change moved it back)
+    const problem = await settle(() => result.current.claimName(' Pat '));
 
-    await settle(1000);
-    expect(there.calls.filter((call) => call === 'list')).toHaveLength(1);
-    expect([...there.songs.keys()].sort()).toEqual(['a', 'b']);
+    expect(problem).toBeNull();
+    expect(backend.guests).toBe(1);
+    expect(result.current.account).toMatchObject({ uid: 'guest-1', guest: true });
+    expect(result.current.nickname).toBe('Pat');
+    expect(backend.people.names.get('guest-1')).toBe('Pat');
   });
 
-  it('syncs again when the connection comes back', async () => {
-    const { backend, store } = await mount({ signedIn: true, restore: true });
-    await settle();
-    const there = backend.clouds.get('u1')!;
-    await store.save(song('a', 50), sound());
+  it('says what is wrong with a name without making an account for it', async () => {
+    const { backend, result } = await setup();
 
-    await act(async () => void window.dispatchEvent(new Event('online')));
-    await settle();
-
-    expect(there.songs.has('a')).toBe(true);
+    expect(await settle(() => result.current.claimName('a b'))).toMatch(/letters, numbers/);
+    expect(await settle(() => result.current.claimName('ab'))).toMatch(/3 to 16/);
+    expect(backend.guests).toBe(0);
+    expect(result.current.account).toBeNull();
   });
 
-  it('does not sync on returning to the page straight after a sync, but does after a while', async () => {
-    const { backend } = await mount({ signedIn: true, restore: true });
-    await settle();
-    const there = backend.clouds.get('u1')!;
-    there.calls.length = 0;
+  it('refuses a name somebody has, whatever its capitals, and leaves the player without one', async () => {
+    const { backend, result } = await setup((backend) => backend.people.owners.set('pat', 'somebody'));
 
-    await act(async () => void document.dispatchEvent(new Event('visibilitychange')));
-    await settle();
-    expect(there.calls).toEqual([]);
+    const problem = await settle(() => result.current.claimName('PAT'));
 
-    await settle(61_000);
-    await act(async () => void document.dispatchEvent(new Event('visibilitychange')));
-    await settle();
-    expect(there.calls).toEqual(['list']);
+    expect(problem).toMatch(/taken/);
+    expect(result.current.nickname).toBeNull();
+    expect(backend.people.names.size).toBe(0);
+    // (Another try, with another name, works with the guest account already made.)
+    expect(await settle(() => result.current.claimName('Pat2'))).toBeNull();
+    expect(backend.guests).toBe(1);
+    expect(result.current.nickname).toBe('Pat2');
+  });
+
+  it('says so, in words, when the cloud cannot be reached', async () => {
+    const { backend, result } = await setup();
+    backend.failSignIn = Object.assign(new Error('offline'), { code: 'auth/network-request-failed' });
+
+    expect(await settle(() => result.current.claimName('Pat'))).toMatch(/reach the cloud/);
+    expect(result.current.nickname).toBeNull();
   });
 });
 
-describe('when something goes wrong', () => {
-  it('says so in plain words when the cloud cannot be reached, and tries again on request', async () => {
-    const { backend, store } = await mount();
-    await store.save(song('a', 50), sound());
-    const there = await backend.songs({ uid: 'u1', name: 'Pat' });
-    (there as unknown as { offline: boolean }).offline = true;
+describe('signing in with Google', () => {
+  it('keeps the guest’s account, and so the nickname and the scores, when they sign in', async () => {
+    const { backend, result } = await setup();
+    await settle(() => result.current.claimName('Pat'));
 
-    await act(async () => void cloud.signIn());
-    await settle();
-    expect(cloud.error).toMatch(/Couldn't reach the cloud/);
-    expect(cloud.syncing).toBeNull();
-    expect(cloud.account).not.toBeNull(); // (still signed in: only the sync failed)
+    await settle(() => result.current.signInWithGoogle());
 
-    (there as unknown as { offline: boolean }).offline = false;
-    await act(async () => void cloud.syncNow());
-    await settle();
-    expect(cloud.error).toBeNull();
-    expect((there as unknown as { songs: Map<string, unknown> }).songs.has('a')).toBe(true);
+    expect(result.current.account).toMatchObject({ uid: 'guest-1', name: 'Pat', guest: false });
+    expect(result.current.nickname).toBe('Pat');
+    expect(backend.people.names.get('guest-1')).toBe('Pat');
+    expect(result.current.signingIn).toBe(false);
   });
 
-  it('says nothing when the player closes the sign-in window', async () => {
-    const { backend } = await mount();
-    backend.failSignIn = Object.assign(new Error('closed'), { code: 'auth/popup-closed-by-user' });
-    await act(async () => void cloud.signIn());
-    await settle();
-    expect(cloud.error).toBeNull();
-    expect(cloud.connecting).toBe(false);
-    expect(cloud.account).toBeNull();
-  });
-
-  it('says what to do when the browser blocks the sign-in window, and lets the message be dismissed', async () => {
-    const { backend } = await mount();
+  it('tells the player when the sign-in window was blocked, and lets them dismiss it', async () => {
+    const { backend, result } = await setup();
     backend.failSignIn = Object.assign(new Error('blocked'), { code: 'auth/popup-blocked' });
-    await act(async () => void cloud.signIn());
-    await settle();
-    expect(cloud.error).toMatch(/pop-ups/);
 
-    await act(async () => cloud.dismissError());
-    expect(cloud.error).toBeNull();
+    await settle(() => result.current.signInWithGoogle());
+    expect(result.current.error).toMatch(/pop-ups/);
+    expect(result.current.account).toBeNull();
+
+    await settle(() => result.current.dismissError());
+    expect(result.current.error).toBeNull();
   });
 
-  it('says what to do when the database turns it away', async () => {
-    const { backend, store } = await mount();
-    await store.save(song('a', 50), sound());
-    const there = await backend.songs({ uid: 'u1', name: 'Pat' });
-    there.list = async () => {
-      throw Object.assign(new Error('no'), { code: 'permission-denied' });
-    };
-    await act(async () => void cloud.signIn());
-    await settle();
-    expect(cloud.error).toMatch(/rules/);
+  it('says nothing when the player closed the window themselves', async () => {
+    const { backend, result } = await setup();
+    backend.failSignIn = Object.assign(new Error('closed'), { code: 'auth/popup-closed-by-user' });
+    await settle(() => result.current.signInWithGoogle());
+    expect(result.current.error).toBeNull();
+  });
+
+  it('forgets who was signed in when they sign out', async () => {
+    const { result } = await setup((backend) => {
+      backend.account = { uid: 'g1', name: 'Pat', guest: false };
+      backend.people.names.set('g1', 'Pat');
+      backend.people.admins.add('g1');
+    });
+    expect(result.current).toMatchObject({ nickname: 'Pat', admin: true });
+
+    await settle(() => result.current.signOut());
+
+    expect(result.current).toMatchObject({ account: null, nickname: undefined, admin: false });
+  });
+});
+
+describe('the leaderboard', () => {
+  it('will not take a run from somebody with no nickname', async () => {
+    const { result } = await setup();
+    await expect(settle(() => result.current.submit('a', { score: 100, laps: 1, chain: 3 }))).rejects.toBeInstanceOf(CloudError);
+  });
+
+  it('puts a run on the board under the nickname and says where it stands', async () => {
+    const { backend, result } = await setup();
+    await settle(() => result.current.claimName('Pat'));
+
+    const sent = await settle(() => result.current.submit('a', { score: 300.4, laps: 2, chain: 7 }));
+
+    expect(sent.improved).toBe(true);
+    expect(sent.mine).toMatchObject({ rank: 1, score: { name: 'Pat', score: 300, laps: 2, chain: 7 } });
+    expect(sent.top).toHaveLength(1);
+    expect(backend.leaderboards.boards.get('a')?.get('guest-1')).toMatchObject({ name: 'Pat', score: 300 });
+  });
+
+  it('keeps the best run, so a worse one changes nothing', async () => {
+    const { backend, result } = await setup();
+    await settle(() => result.current.claimName('Pat'));
+    await settle(() => result.current.submit('a', { score: 500, laps: 2, chain: 7 }));
+
+    const worse = await settle(() => result.current.submit('a', { score: 200, laps: 1, chain: 2 }));
+
+    expect(worse.improved).toBe(false);
+    expect(worse.mine?.score.score).toBe(500);
+    expect(backend.leaderboards.boards.get('a')?.get('guest-1')?.score).toBe(500);
+  });
+
+  it('shows the others on the board too, best first', async () => {
+    const { backend, result } = await setup();
+    backend.leaderboards.boards.set(
+      'a',
+      new Map([
+        ['x', { uid: 'x', name: 'Xan', score: 900, laps: 3, chain: 20 }],
+        ['y', { uid: 'y', name: 'Yas', score: 100, laps: 1, chain: 4 }],
+      ]),
+    );
+    await settle(() => result.current.claimName('Pat'));
+
+    const sent = await settle(() => result.current.submit('a', { score: 400, laps: 2, chain: 8 }));
+
+    expect(sent.top.map((score) => score.name)).toEqual(['Xan', 'Pat', 'Yas']);
+    expect(sent.mine?.rank).toBe(2);
+  });
+
+  it('looks at a board again only when it is a while since, or asked to', async () => {
+    const { backend, result } = await setup();
+    const tops = () => backend.leaderboards.calls.filter((call) => call.startsWith('top')).length;
+
+    await settle(() => result.current.loadBoard('a'));
+    await settle(() => result.current.loadBoard('a'));
+    expect(tops()).toBe(1);
+
+    await settle(() => result.current.loadBoard('a', true));
+    expect(tops()).toBe(2);
+    await settle(() => result.current.loadBoard('b'));
+    expect(tops()).toBe(3);
+  });
+
+  it('has no standing to show for somebody who has not signed in', async () => {
+    const { backend, result } = await setup();
+    const board = await settle(() => result.current.loadBoard('a'));
+    expect(board.mine).toBeUndefined();
+    expect(backend.leaderboards.calls.some((call) => call.startsWith('standing'))).toBe(false);
+  });
+
+  it('rejects, so the run can be sent again, when the cloud cannot be reached', async () => {
+    const { backend, result } = await setup();
+    await settle(() => result.current.claimName('Pat'));
+    backend.leaderboards.offline = true;
+
+    await expect(settle(() => result.current.submit('a', { score: 100, laps: 1, chain: 1 }))).rejects.toMatchObject({ code: 'unavailable' });
+
+    backend.leaderboards.offline = false;
+    expect((await settle(() => result.current.submit('a', { score: 100, laps: 1, chain: 1 }))).improved).toBe(true);
   });
 });

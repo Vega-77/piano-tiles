@@ -1,13 +1,16 @@
-import { useCallback, useEffect, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { Board } from './components/Board';
+import { AccountPanel } from './components/AccountPanel';
 import { GameOverOverlay } from './components/GameOverOverlay';
 import { Hud } from './components/Hud';
 import { ImportPanel } from './components/ImportPanel';
+import { Leaderboard } from './components/Leaderboard';
 import { JobStatus } from './components/JobStatus';
 import { PauseOverlay } from './components/PauseOverlay';
+import { RunStanding } from './components/RunStanding';
 import { SongSelect } from './components/SongSelect';
 import { TuneScreen } from './components/TuneScreen';
-import { CloudPanel } from './components/CloudPanel';
+import { useCatalog } from './hooks/useCatalog';
 import { useCloud } from './hooks/useCloud';
 import { useGame } from './hooks/useGame';
 import { useImporter } from './hooks/useImporter';
@@ -31,10 +34,13 @@ function useKeepFileDropsOut() {
 
 export default function App() {
   const library = useLibrary();
-  const game = useGame(library.songs);
-  const cloud = useCloud({ refresh: library.refresh });
-  const importer = useImporter(library.refresh, cloud.syncSoon);
-  const synced = cloud.account !== null;
+  const cloud = useCloud();
+  const catalog = useCatalog({ refresh: library.refresh });
+  const importer = useImporter(library.refresh);
+  const { admin } = cloud;
+  // A draft is the admin's own work: everyone else plays only what has been published.
+  const songs = useMemo(() => (admin ? library.songs : library.songs.filter((song) => song.imported?.publication !== 'draft')), [admin, library.songs]);
+  const game = useGame(songs, catalog.prepare);
   const { state, lastRun, stats, selectedId, setSelectedId, activeSong, refs, start, quit, pause, resume } = game;
   // (With no song to follow, the stylesheet's own colours apply.)
   const theme = activeSong ? ({ '--hue': activeSong.hue, '--hue2': activeSong.hue2 } as CSSProperties) : undefined;
@@ -43,7 +49,7 @@ export default function App() {
   // The menu is either for picking a song or, when a song has been chosen to tune, for tuning it.
   // (It stays chosen while that song is played, so quitting the game comes back to the tuning.)
   const [tuningId, setTuningId] = useState<string | null>(null);
-  const tuning = library.songs.find((song) => song.id === tuningId && song.imported);
+  const tuning = admin ? songs.find((song) => song.id === tuningId && song.imported) : undefined;
 
   const { add, remove, dismiss, working } = importer;
   const addSong = useCallback(
@@ -77,7 +83,6 @@ export default function App() {
       error={importer.error}
       added={importer.added}
       persistent={library.persistent}
-      synced={synced}
       onCancel={importer.cancel}
       onDismiss={dismiss}
       onTune={onTune}
@@ -122,11 +127,12 @@ export default function App() {
               key={tuning.id}
               song={tuning}
               busy={working !== null}
-              synced={synced}
               status={jobStatus()}
               onTune={importer.tune}
               onRechart={importer.rechart}
               onSave={importer.save}
+              onPublish={importer.publish}
+              onUnpublish={importer.unpublish}
               onRemove={removeSong}
               onPlay={start}
               onBack={stopTuning}
@@ -135,20 +141,38 @@ export default function App() {
 
           {state.status === 'menu' && !tuning && (
             <SongSelect
-              songs={library.songs}
-              ready={library.ready}
+              songs={songs}
+              ready={library.ready && (songs.length > 0 || !catalog.syncing)}
               stats={stats}
               selectedId={selectedId}
               onSelect={setSelectedId}
               onPlay={start}
               loadingId={game.loadingId}
+              loadProgress={game.loadProgress}
               loadError={game.loadError}
               problems={library.problems}
-              onDropFile={addSong}
-              cloud={<CloudPanel cloud={cloud} />}
-              adder={<ImportPanel busy={working !== null} persistent={library.persistent} synced={synced} onFile={addSong} />}
-              status={jobStatus(tune)}
-              onTune={(song) => tune(song.id)}
+              onDropFile={admin ? addSong : undefined}
+              admin={admin}
+              empty={<p className="font-bold text-white">{catalog.error ? 'The published songs could not be looked at' : 'No songs have been published yet'}</p>}
+              account={<AccountPanel cloud={cloud} />}
+              board={(song) =>
+                song.imported && song.imported.publication !== 'draft' && !cloud.checking ? (
+                  <Leaderboard songId={song.id} load={cloud.loadBoard} uid={cloud.account?.uid} />
+                ) : null
+              }
+              notice={
+                catalog.error && (
+                  <div role="alert" className="flex items-center justify-between gap-3 rounded-2xl bg-amber-400/10 px-3 py-2 text-xs leading-snug text-amber-200 ring-1 ring-amber-300/30">
+                    <p className="min-w-0 flex-1">{catalog.error}</p>
+                    <button type="button" onClick={() => void catalog.sync()} className="btn-ghost shrink-0 rounded-full px-3 py-1 text-xs font-bold text-white">
+                      Try again
+                    </button>
+                  </div>
+                )
+              }
+              adder={admin && <ImportPanel busy={working !== null} persistent={library.persistent} onFile={addSong} />}
+              status={jobStatus(admin ? tune : undefined)}
+              onTune={admin ? (song) => tune(song.id) : undefined}
             />
           )}
 
@@ -160,6 +184,16 @@ export default function App() {
               score={state.score}
               best={state.highScore}
               result={lastRun}
+              standing={
+                // (Only a song as it is published counts: a draft, or one changed since, is not the chart everyone plays.)
+                lastRun && lastRun.score > 0 && activeSong.imported?.publication === 'live' ? (
+                  <RunStanding
+                    songId={activeSong.id}
+                    run={{ score: lastRun.score, laps: lastRun.stats.laps, chain: lastRun.stats.maxChain }}
+                    cloud={cloud}
+                  />
+                ) : null
+              }
               onRestart={() => start(activeSong.id)}
               onMenu={quit}
             />
