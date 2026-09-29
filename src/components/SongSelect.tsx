@@ -167,8 +167,11 @@ function SongCard({ song, index, stats, selected, onSelect }: SongCardProps) {
 
 interface SongSelectProps {
   songs: readonly Song[];
+  /** False while the saved songs are still being read (so an empty list isn't "no songs yet"). */
+  ready?: boolean;
   stats: StatsMap;
-  selectedId: string;
+  /** The highlighted song; null when there is none to highlight. */
+  selectedId: string | null;
   onSelect: (id: string) => void;
   onPlay: (id: string) => void;
   /** The song being fetched before it can start, and why one couldn't be. */
@@ -190,6 +193,7 @@ const carriesFiles = (event: DragEvent) => Array.from(event.dataTransfer.types).
 
 export function SongSelect({
   songs,
+  ready = true,
   stats,
   selectedId,
   onSelect,
@@ -202,7 +206,7 @@ export function SongSelect({
   status,
   onTune,
 }: SongSelectProps) {
-  const selected = songs.find((song) => song.id === selectedId) ?? songs[0];
+  const selected = songs.find((song) => song.id === selectedId);
   const loading = loadingId !== null;
   const list = useRef<HTMLUListElement>(null);
 
@@ -215,7 +219,7 @@ export function SongSelect({
   useEffect(() => {
     const card = list.current?.querySelector('[aria-pressed="true"]');
     if (card && 'scrollIntoView' in card) card.scrollIntoView({ block: 'nearest' });
-  }, [selected.id]);
+  }, [selected?.id]);
 
   const drag = {
     onDragEnter: (event: DragEvent) => {
@@ -248,20 +252,34 @@ export function SongSelect({
     <div className="absolute inset-0 z-20 flex flex-col bg-black/50 text-white" {...drag}>
       <header className="rise-in px-5 pb-3 pt-[max(1.5rem,env(safe-area-inset-top))] text-center">
         <h1 className="title-gradient text-4xl font-black tracking-tight">Piano Tiles</h1>
-        <p className="mt-1 text-sm text-white/60">Choose a song</p>
+        <p className="mt-1 text-sm text-white/60">
+          {songs.length > 0 ? 'Choose a song' : ready ? 'Add your first song' : ' '}
+        </p>
       </header>
 
       <ul ref={list} className="song-list flex-1 space-y-3 overflow-y-auto px-4 pb-4">
+        {songs.length === 0 && (
+          <li className="rounded-2xl bg-white/5 px-4 py-6 text-center text-sm leading-snug text-white/65 ring-1 ring-white/10">
+            {ready ? (
+              <>
+                <p className="font-bold text-white">No songs yet</p>
+                <p className="mt-1">Add one below: an mp4, an audio file or a song file. The tiles are made to match its beat.</p>
+              </>
+            ) : (
+              <p role="status">Loading your songs…</p>
+            )}
+          </li>
+        )}
         {songs.map((song, index) => (
           <li key={song.id}>
             <SongCard
               song={song}
               index={index}
               stats={stats[song.id]}
-              selected={song.id === selected.id}
+              selected={song.id === selected?.id}
               onSelect={() => onSelect(song.id)}
             />
-            {song.id === selected.id && song.imported && onTune && (
+            {song.id === selected?.id && song.imported && onTune && (
               <button
                 type="button"
                 onClick={() => onTune(song)}
@@ -294,24 +312,28 @@ export function SongSelect({
             {loadError}
           </p>
         )}
-        <button
-          type="button"
-          onClick={() => onPlay(selected.id)}
-          disabled={loading}
-          className="btn-primary flex w-full items-center justify-center gap-2 rounded-full px-6 py-4 text-lg font-extrabold text-white disabled:cursor-wait disabled:opacity-70"
-        >
-          {loading ? (
-            <span className="h-5 w-5 shrink-0 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden />
-          ) : (
-            <svg viewBox="0 0 24 24" className="h-5 w-5 shrink-0 fill-current" aria-hidden>
-              <path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5Z" />
-            </svg>
-          )}
-          <span className="truncate">{loading ? 'Loading the song…' : `Play ${selected.title}`}</span>
-        </button>
-        <p className="mt-2 hidden text-center text-xs text-white/40 pointer-fine:block">
-          Keyboard: D · F · J · K &nbsp;·&nbsp; Esc to pause
-        </p>
+        {selected && (
+          <>
+            <button
+              type="button"
+              onClick={() => onPlay(selected.id)}
+              disabled={loading}
+              className="btn-primary flex w-full items-center justify-center gap-2 rounded-full px-6 py-4 text-lg font-extrabold text-white disabled:cursor-wait disabled:opacity-70"
+            >
+              {loading ? (
+                <span className="h-5 w-5 shrink-0 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden />
+              ) : (
+                <svg viewBox="0 0 24 24" className="h-5 w-5 shrink-0 fill-current" aria-hidden>
+                  <path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5Z" />
+                </svg>
+              )}
+              <span className="truncate">{loading ? 'Loading the song…' : `Play ${selected.title}`}</span>
+            </button>
+            <p className="mt-2 hidden text-center text-xs text-white/40 pointer-fine:block">
+              Keyboard: D · F · J · K &nbsp;·&nbsp; Esc to pause
+            </p>
+          </>
+        )}
       </footer>
 
       {dragging && (

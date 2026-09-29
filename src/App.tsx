@@ -32,7 +32,8 @@ export default function App() {
   const game = useGame(library.songs);
   const importer = useImporter(library.refresh);
   const { state, lastRun, stats, selectedId, setSelectedId, activeSong, refs, start, quit, pause, resume } = game;
-  const theme = { '--hue': activeSong.hue, '--hue2': activeSong.hue2 } as CSSProperties;
+  // (With no song to follow, the stylesheet's own colours apply.)
+  const theme = activeSong ? ({ '--hue': activeSong.hue, '--hue2': activeSong.hue2 } as CSSProperties) : undefined;
   useKeepFileDropsOut();
 
   // The menu is either for picking a song or, when a song has been chosen to tune, for tuning it.
@@ -51,12 +52,10 @@ export default function App() {
   );
   const removeSong = useCallback(
     async (id: string) => {
-      if (await remove(id)) {
-        setTuningId(null);
-        setSelectedId(library.songs[0].id);
-      }
+      // (The removed song stops being selectable once the library is read again.)
+      if (await remove(id)) setTuningId(null);
     },
-    [remove, library.songs, setSelectedId],
+    [remove],
   );
   const tune = useCallback(
     (id: string) => {
@@ -100,7 +99,7 @@ export default function App() {
             onPointerUp={game.handlePointerUp}
           />
 
-          {state.status !== 'menu' && (
+          {state.status !== 'menu' && activeSong && (
             <Hud
               title={activeSong.title}
               score={state.score}
@@ -131,6 +130,7 @@ export default function App() {
           {state.status === 'menu' && !tuning && (
             <SongSelect
               songs={library.songs}
+              ready={library.ready}
               stats={stats}
               selectedId={selectedId}
               onSelect={setSelectedId}
@@ -147,7 +147,7 @@ export default function App() {
 
           {state.status === 'playing' && state.paused && <PauseOverlay onResume={resume} onQuit={quit} />}
 
-          {state.status === 'gameover' && (
+          {state.status === 'gameover' && activeSong && (
             <GameOverOverlay
               song={activeSong}
               score={state.score}

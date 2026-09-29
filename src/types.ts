@@ -3,7 +3,7 @@ export type GameStatus = 'menu' | 'playing' | 'gameover';
 export interface GameState {
   status: GameStatus;
   score: number;
-  /** How much faster tiles fall than on the first lap of the song: LAP_SPEED_FACTOR ** lap. */
+  /** How much faster tiles fall than on the first lap of the song: 1 + LAP_SPEED_STEP * lap. */
   speedMultiplier: number;
   /** Best score for the current song. */
   highScore: number;
@@ -123,7 +123,7 @@ export interface ImportInfo {
   /** Whether the tempo was typed in rather than detected. */
   manualBpm: boolean;
   /** How busy the chart was asked to be. */
-  level: 'easy' | 'normal' | 'hard';
+  level: 'easy' | 'medium' | 'hard';
   /** 0–1: how well the detected beats fit the grid, when the analyser said. */
   confidence?: number;
   warnings: readonly string[];

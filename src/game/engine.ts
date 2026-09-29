@@ -456,14 +456,14 @@ export class GameEngine {
 
   /**
    * Hand a recorded song to the audio clock, one lap at a time. Lap `n` plays the whole recording
-   * `LAP_SPEED_FACTOR ** n` times faster, starting early enough that the recording's beat grid
+   * `1 + LAP_SPEED_STEP * n` times faster, starting early enough that the recording's beat grid
    * (row 0 is `offset` seconds in) lands exactly where the timeline puts row 0 of that lap.
    */
   private scheduleRecording(now: number): void {
     const { song, timeline } = this;
     const recording = song?.recording;
     if (!recording || !timeline) return;
-    // Laps shrink geometrically, so cap how many are handed over in one frame.
+    // Laps keep getting shorter, so cap how many are handed over in one frame.
     for (let laps = 0; laps < 2 && this.recordedLap < MAX_RECORDED_LAPS; laps++) {
       const lap = this.recordedLap;
       const speed = timeline.speedFactor(lap);

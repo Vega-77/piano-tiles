@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { LAP_REST_SECONDS, LAP_SPEED_FACTOR } from '../config';
+import { LAP_REST_SECONDS, LAP_SPEED_STEP } from '../config';
 import { Timeline } from './timeline';
+
+/** How much faster than the first lap the given lap runs: 1, 1.2, 1.4, 1.6... */
+const speed = (lap: number) => 1 + LAP_SPEED_STEP * lap;
 
 // 2 rows/s, 10 rows per lap, first tile reaches the bar at t = 5, 8 rows of count-in before later laps.
 const COUNT_IN = 8;
@@ -15,12 +18,12 @@ describe('Timeline', () => {
     expect(timeline.rate(0)).toBe(2);
   });
 
-  it('jumps the speed by a fixed factor every lap', () => {
+  it('adds the same step to the speed every lap, without compounding', () => {
     const timeline = make();
-    expect(timeline.speedFactor(0)).toBe(1);
-    expect(timeline.speedFactor(1)).toBeCloseTo(LAP_SPEED_FACTOR, 9);
-    expect(timeline.speedFactor(2)).toBeCloseTo(LAP_SPEED_FACTOR ** 2, 9);
-    expect(timeline.rate(3) / timeline.rate(2)).toBeCloseTo(LAP_SPEED_FACTOR, 9);
+    expect(LAP_SPEED_STEP).toBeCloseTo(0.2, 9);
+    expect([0, 1, 2, 3, 4].map((lap) => timeline.speedFactor(lap))).toEqual([1, 1.2, 1.4, 1.6, 1.8].map((s) => expect.closeTo(s, 9)));
+    expect(timeline.rate(3) - timeline.rate(2)).toBeCloseTo(timeline.rate(1) - timeline.rate(0), 9);
+    expect(timeline.rate(3)).toBeCloseTo(2 * 1.6, 9);
   });
 
   it('leaves a rest and a count-in of empty rows in front of every lap but the first', () => {
@@ -51,7 +54,7 @@ describe('Timeline', () => {
     }
     const body0 = timeline.lapEnd(0) - timeline.lapStart(0);
     const body1 = timeline.lapEnd(1) - timeline.lapStart(1);
-    expect(body1).toBeCloseTo(body0 / LAP_SPEED_FACTOR, 9);
+    expect(body1).toBeCloseTo(body0 / speed(1), 9);
   });
 
   it('gives the rest and count-in to the lap they lead into', () => {
@@ -71,7 +74,7 @@ describe('Timeline', () => {
     expect(timeline.rowsAt(end)).toBeCloseTo(10, 9);
     expect(timeline.rowsAt(end - 1e-6)).toBeCloseTo(10, 4);
     // The board scrolls on, empty, at the new speed.
-    expect(timeline.rowsAt(end + 1)).toBeCloseTo(10 + LAP_SPEED_FACTOR * 2, 9);
+    expect(timeline.rowsAt(end + 1)).toBeCloseTo(10 + speed(1) * 2, 9);
     // And row 0 of the next lap is exactly where the gap ends.
     expect(timeline.rowsAt(timeline.lapStart(1))).toBeCloseTo(timeline.origin(1), 9);
     expect(timeline.rowsAt(timeline.lapStart(1) - 1e-6)).toBeCloseTo(timeline.origin(1), 4);
@@ -86,7 +89,7 @@ describe('Timeline', () => {
     // The same row arrives sooner after it than before, because the song is faster.
     const gap0 = timeline.arrival(0, 5) - timeline.arrival(0, 4);
     const gap2 = timeline.arrival(2, 5) - timeline.arrival(2, 4);
-    expect(gap0 / gap2).toBeCloseTo(LAP_SPEED_FACTOR ** 2, 9);
+    expect(gap0 / gap2).toBeCloseTo(speed(2), 9);
   });
 
   it('puts the count-in ticks before the first tile of a lap, one beat apart', () => {

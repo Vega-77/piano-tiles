@@ -1,4 +1,4 @@
-import { LAP_REST_SECONDS, LAP_SPEED_FACTOR } from '../config';
+import { LAP_REST_SECONDS, LAP_SPEED_STEP } from '../config';
 
 const MAX_LAPS = 64;
 
@@ -8,7 +8,7 @@ const MAX_LAPS = 64;
  *
  * Positions are measured in "rows scrolled": 0 is the moment the very first tile reaches the
  * bar. Each lap of the song is `rowsPerLap` rows long, and lap `n` scrolls at
- * `baseRate * LAP_SPEED_FACTOR ** n` rows per second, so the tempo jumps every time the song
+ * `baseRate * (1 + LAP_SPEED_STEP * n)` rows per second, so the tempo jumps every time the song
  * finishes.
  *
  * Between laps the board keeps scrolling, empty, at the new lap's speed: a rest of at least
@@ -41,7 +41,7 @@ export class Timeline {
 
   /** How much faster than lap 0 the given lap runs. */
   speedFactor(lap: number): number {
-    return LAP_SPEED_FACTOR ** lap;
+    return 1 + LAP_SPEED_STEP * lap;
   }
 
   /** Rows per second during a lap. */

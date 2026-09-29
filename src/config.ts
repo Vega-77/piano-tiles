@@ -13,10 +13,11 @@ export const BAR_Y = 80;
 export const LEAD_ROWS = 4;
 
 /**
- * Each time the song finishes, tiles fall (and the music plays) this many times faster
- * than on the previous lap: lap 0 = 1x, lap 1 = 1.2x, lap 2 = 1.44x, and so on.
+ * Each time the song finishes, tiles fall (and the music plays) this much faster than at the
+ * start: lap 0 = 1x, lap 1 = 1.2x, lap 2 = 1.4x, lap 3 = 1.6x, and so on. The step is added to
+ * the first lap's speed each time; it doesn't compound.
  */
-export const LAP_SPEED_FACTOR = 1.2;
+export const LAP_SPEED_STEP = 0.2;
 
 /**
  * After every lap the board empties for at least this long (seconds, at the new speed) so the

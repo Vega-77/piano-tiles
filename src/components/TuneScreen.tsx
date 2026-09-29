@@ -4,11 +4,11 @@ import { DENSITIES, type Density, type RechartOptions, type TuneOptions } from '
 import { DIFFICULTY_LABELS } from '../songs/songs';
 import type { Song } from '../types';
 
-const DENSITY_LABELS: Record<Density, string> = { easy: 'Easy', normal: 'Normal', hard: 'Busy' };
+const DENSITY_LABELS: Record<Density, string> = { easy: 'Easy', medium: 'Medium', hard: 'Hard' };
 const DENSITY_HINTS: Record<Density, string> = {
-  easy: 'Fewer tiles, with room to breathe.',
-  normal: 'A steady stream of tiles.',
-  hard: 'Lots of tiles, close together.',
+  easy: 'A steady stream of tiles, with room to breathe.',
+  medium: 'Lots of tiles, close together.',
+  hard: 'Tiles on nearly every hit in the music, with more doubles.',
 };
 
 /** The slider stops short of the file's limit: a song that far off wants a different tempo, not a nudge. */
@@ -54,7 +54,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 export function TuneScreen({ song, busy, status, onTune, onRechart, onSave, onRemove, onPlay, onBack }: TuneScreenProps) {
   const info = song.imported;
   const savedNudge = Math.round((info?.nudge ?? 0) * 1000);
-  const savedLevel = info?.level ?? 'normal';
+  const savedLevel = info?.level ?? 'medium';
   const [title, setTitle] = useState(song.title);
   const [nudge, setNudge] = useState(savedNudge);
   // The tempo as found can have a long tail (99.996); show it to a tenth. Only a typed change counts as by hand.

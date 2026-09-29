@@ -43,13 +43,6 @@ describe('loading the songs saved on this device', () => {
     ]);
   });
 
-  it('will not let a saved song take over the id of one that already exists', async () => {
-    const store = await storeWith(fakeChart('twinkle'), fakeChart('fresh'));
-    const { songs, problems } = await loadStoredSongs(store, ['twinkle']);
-    expect(songs.map((s) => s.id)).toEqual(['fresh']);
-    expect(problems).toEqual([expect.stringContaining('another song already has that id')]);
-  });
-
   it('says so, and carries on, when the saved songs cannot be read at all', async () => {
     const broken: SongStore = {
       ...createMemoryStore(),

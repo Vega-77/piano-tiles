@@ -8,13 +8,9 @@ export interface StoredLibrary {
   problems: string[];
 }
 
-/**
- * The songs saved on this device, ready to play: easiest first, then by name. `taken` are ids the
- * built-in songs already use.
- */
-export async function loadStoredSongs(store: SongStore, taken: readonly string[] = []): Promise<StoredLibrary> {
+/** The songs saved on this device, ready to play: easiest first, then by name. */
+export async function loadStoredSongs(store: SongStore): Promise<StoredLibrary> {
   const problems: string[] = [];
-  const used = new Set(taken);
   const songs: Song[] = [];
 
   let saved: unknown[];
@@ -28,9 +24,7 @@ export async function loadStoredSongs(store: SongStore, taken: readonly string[]
     const name = (raw as { title?: unknown } | null)?.title;
     try {
       const chart = validateChart(raw);
-      if (used.has(chart.id)) throw new Error('another song already has that id');
       songs.push(songFromChart(chart, storedFolder(chart.id)));
-      used.add(chart.id);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       problems.push(`Couldn't load "${typeof name === 'string' ? name : 'a saved song'}": ${reason}`);

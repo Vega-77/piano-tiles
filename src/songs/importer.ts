@@ -1,11 +1,10 @@
 import { fingerprintOf, type AnalyzeOptions } from './analysis/analyze';
 import { analyzeSamples, type Analyser } from './analysis/client';
-import type { Density } from './analysis/tiles';
+import { DEFAULT_DENSITY, densityFrom, type Density } from './analysis/tiles';
 import { isSongFile, packSong, songFileName, unpackSong } from './bundle';
 import { MAX_NUDGE, validateChart, type ChartFile } from './chart';
 import { MAX_UPLOAD_MB, audioToKeep, browserDecoder, decodeToSamples, type Decoder, type StoredAudio } from './decode';
 import { Cancelled, ImportError } from './errors';
-import { SONGS } from './songs';
 import { MISSING_AUDIO, getSongStore, keepSongs, type SongStore } from './store';
 
 /**
@@ -57,15 +56,12 @@ export interface Tools {
   store(): Promise<SongStore>;
   decoder: Decoder;
   analyse: Analyser;
-  /** Ids the built-in songs already have. */
-  reserved: readonly string[];
 }
 
 export const defaultTools: Tools = {
   store: getSongStore,
   decoder: browserDecoder,
   analyse: analyzeSamples,
-  reserved: SONGS.map((song) => song.id),
 };
 
 const MIN_BPM = 40;
@@ -118,9 +114,9 @@ function checkBpm(bpm: number | undefined): void {
   }
 }
 
-/** Ids in use: the built-in songs' and the saved ones'. */
-async function takenIds(store: SongStore, tools: Tools): Promise<Set<string>> {
-  const taken = new Set(tools.reserved);
+/** Ids in use by the saved songs. */
+async function takenIds(store: SongStore): Promise<Set<string>> {
+  const taken = new Set<string>();
   for (const chart of await store.charts()) {
     const id = (chart as { id?: unknown } | null)?.id;
     if (typeof id === 'string') taken.add(id);
@@ -138,7 +134,7 @@ async function savedChart(store: SongStore, id: string): Promise<ChartFile> {
   }
 }
 
-const levelOf = (chart: ChartFile): Density => (chart.analysis?.level === 'easy' || chart.analysis?.level === 'hard' ? chart.analysis.level : 'normal');
+const levelOf = (chart: ChartFile): Density => densityFrom(chart.analysis?.level);
 
 function checked(chart: ChartFile): ChartFile {
   try {
@@ -174,13 +170,13 @@ export async function addSong(file: File, options: ImportOptions = {}, job: Job 
   const store = await tools.store();
   const { samples, fingerprint, audio } = await prepare(file, job, tools, 0.3);
 
-  const analyzeOptions: AnalyzeOptions = { density: options.density ?? 'normal', bpm: options.bpm };
+  const analyzeOptions: AnalyzeOptions = { density: options.density ?? DEFAULT_DENSITY, bpm: options.bpm };
   const measured = await tools.analyse(samples, analyzeOptions, (progress) => stage(progress.message, 0.3 + 0.62 * (progress.fraction ?? 0)), job.signal);
   notCancelled(job);
 
   stage('Saving the song', 0.94);
   const title = (options.title?.trim() || titleFromFileName(file.name)).slice(0, MAX_TEXT);
-  const id = uniqueId(slugify(title), await takenIds(store, tools));
+  const id = uniqueId(slugify(title), await takenIds(store));
   const hue = (fingerprint >>> 8) % 360;
   const chart = checked({
     version: 1,
@@ -273,7 +269,7 @@ async function addSongFile(file: File, job: Job, tools: Tools): Promise<ChartFil
   const store = await tools.store();
   const saved = (await store.charts()).find((raw) => (raw as { id?: unknown } | null)?.id === chart.id) as { audio?: unknown } | undefined;
   let id = chart.id;
-  if (saved?.audio !== chart.audio) id = uniqueId(id, await takenIds(store, tools));
+  if (saved?.audio !== chart.audio) id = uniqueId(id, await takenIds(store));
 
   stage('Saving the song', 0.7);
   const added = { ...chart, id };

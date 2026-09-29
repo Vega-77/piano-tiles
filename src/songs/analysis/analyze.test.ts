@@ -4,7 +4,7 @@ import { AnalysisError, DENSITIES, MAX_SECONDS, analyze, hueOf, type Measured } 
 import { SAMPLE_RATE, computeFeatures } from './features';
 import { MAX_ROWS_PER_SECOND, MIN_ROWS_PER_SECOND, pickRowsPerBeat, rowsPerBeatForBpm } from './grid';
 import { synthForAnalysis } from './synth';
-import { DENSITY } from './tiles';
+import { DEFAULT_DENSITY, DENSITY, densityFrom } from './tiles';
 
 /**
  * These run the analyser on songs made here, where the true tempo and the first beat are known, so
@@ -24,7 +24,7 @@ function gridError(chart: Measured, bpm: number, offset: number): { tempo: numbe
   return { tempo: Math.abs(rate / (truth * multiple) - 1), phase: Math.min(diff, row - diff) * 1000 };
 }
 
-const NORMAL = { density: 'normal' } as const;
+const MEDIUM = { density: 'medium' } as const;
 
 describe('the analyser on made-up songs', () => {
   const songs: Record<string, { bpm: number; offset: number; seconds: number; samples?: Float32Array }> = {
@@ -44,7 +44,7 @@ describe('the analyser on made-up songs', () => {
   for (const key of ['a', 'b', 'c', 'd']) {
     const song = songs[key];
     it(`finds ${song.bpm} BPM with the first beat at ${song.offset}s`, () => {
-      const chart = analyze(song.samples!, NORMAL);
+      const chart = analyze(song.samples!, MEDIUM);
       const error = gridError(chart, song.bpm, song.offset);
       const analysis = chart.analysis!;
       expect(error.tempo).toBeLessThan(0.002);
@@ -62,7 +62,7 @@ describe('the analyser on made-up songs', () => {
 
   it('copes with a human band, every player about 10 ms off the beat', async () => {
     const samples = await synthForAnalysis({ bpm: 104, offset: 0.29, seconds: 60, seed: 7, jitter: 0.01 });
-    const chart = analyze(samples, NORMAL);
+    const chart = analyze(samples, MEDIUM);
     const error = gridError(chart, 104, 0.29);
     expect(error.tempo).toBeLessThan(0.003);
     expect(error.phase).toBeLessThan(15);
@@ -72,12 +72,12 @@ describe('the analyser on made-up songs', () => {
 
   it('warns about a tempo that speeds up over the song', async () => {
     const samples = await synthForAnalysis({ bpm: 100, offset: 0.2, seconds: 90, seed: 3, warp: 0.005 });
-    const chart = analyze(samples, NORMAL);
+    const chart = analyze(samples, MEDIUM);
     expect(chart.analysis!.warnings!.some((warning) => warning.includes('drifts'))).toBe(true);
   }, SLOW);
 
   it('refines a tempo given by hand a few BPM off to the true grid', () => {
-    const chart = analyze(songs.a.samples!, { ...NORMAL, bpm: 118 });
+    const chart = analyze(songs.a.samples!, { ...MEDIUM, bpm: 118 });
     const error = gridError(chart, 120, 0.37);
     expect(chart.analysis!.manualBpm).toBe(true);
     expect(error.tempo).toBeLessThan(0.002);
@@ -85,13 +85,40 @@ describe('the analyser on made-up songs', () => {
   }, SLOW);
 
   it('puts more tiles in at each density', () => {
-    const [easy, normal, hard] = DENSITIES.map((density) => analyze(songs.b.samples!, { density }).analysis!.tiles);
-    expect(easy).toBeLessThan(normal);
-    expect(normal).toBeLessThan(hard);
+    const [easy, medium, hard] = DENSITIES.map((density) => analyze(songs.b.samples!, { density }).analysis!.tiles);
+    expect(easy).toBeLessThan(medium);
+    expect(medium).toBeLessThan(hard);
   }, SLOW);
 
+  it('never asks for more taps a second than a hand can give, even on Hard', () => {
+    for (const key of ['a', 'c']) {
+      const chart = analyze(songs[key].samples!, { density: 'hard' });
+      const row = 1 / rowsPerSecond(chart);
+      let position = 0;
+      let last: number | undefined;
+      let quickest = Infinity;
+      for (const token of chart.chart.split(/\s+/).filter(Boolean)) {
+        if (token.startsWith('.')) {
+          position += token.length > 1 ? Number(token.slice(1)) : 1;
+          continue;
+        }
+        if (last !== undefined) quickest = Math.min(quickest, (position - last) * row);
+        last = position;
+        position += token.startsWith('x~') ? Number(token.slice(2)) : 1;
+      }
+      expect(quickest).toBeGreaterThanOrEqual(1 / 4.5 - 1e-6);
+    }
+  }, SLOW);
+
+  it('reads the level a chart was saved with, including the old name for Easy', () => {
+    expect(DENSITIES.map(densityFrom)).toEqual(DENSITIES);
+    expect(densityFrom('normal')).toBe('easy'); // (charts saved before the levels moved up one)
+    expect(densityFrom('insane')).toBe(DEFAULT_DENSITY);
+    expect(densityFrom(undefined)).toBe(DEFAULT_DENSITY);
+  });
+
   it('puts the tiles on the drums, not between them', () => {
-    const chart = analyze(songs.a.samples!, NORMAL);
+    const chart = analyze(songs.a.samples!, MEDIUM);
     const beat = 60 / 120;
     const row = beat / chart.rowsPerBeat;
     let position = 0;
@@ -139,7 +166,7 @@ describe('the analyser on made-up songs', () => {
 
     it('keeps the difficulties: the same number of tiles, wherever they fall', () => {
       const tiles = DENSITIES.map((density) => analyze(samples, { density }).analysis!.tiles);
-      const rows = analyze(samples, NORMAL).analysis!.rows;
+      const rows = analyze(samples, MEDIUM).analysis!.rows;
       tiles.forEach((count, i) => expect(count).toBeGreaterThan(0.95 * Math.trunc(DENSITY[DENSITIES[i]].fraction * rows)));
       expect(tiles[0]).toBeLessThan(tiles[1]);
       expect(tiles[1]).toBeLessThan(tiles[2]);
@@ -148,7 +175,7 @@ describe('the analyser on made-up songs', () => {
     it('leaves a silent stretch bare rather than filling it with noise', async () => {
       const gap = (time: number) => time >= 40 && time < 56;
       const song = await synthForAnalysis({ bpm: 120, offset: 0.2, seconds: 96, seed: 5, verse, silent: gap });
-      const chart = analyze(song, NORMAL);
+      const chart = analyze(song, MEDIUM);
       const rate = rowsPerSecond(chart);
       let inGap = 0;
       let position = 0;
@@ -162,8 +189,8 @@ describe('the analyser on made-up songs', () => {
   });
 
   it('is deterministic, and writes a chart the game can read', () => {
-    const first = analyze(songs.c.samples!, NORMAL);
-    const second = analyze(songs.c.samples!, NORMAL);
+    const first = analyze(songs.c.samples!, MEDIUM);
+    const second = analyze(songs.c.samples!, MEDIUM);
     expect(second).toEqual(first);
     expect(first.difficulty).toBeGreaterThanOrEqual(1);
     expect(first.difficulty).toBeLessThanOrEqual(5);
@@ -172,7 +199,7 @@ describe('the analyser on made-up songs', () => {
 
   it('reports how far along it is, ending at 1', () => {
     const seen: number[] = [];
-    analyze(songs.d.samples!, NORMAL, (progress) => {
+    analyze(songs.d.samples!, MEDIUM, (progress) => {
       if (progress.fraction !== undefined) seen.push(progress.fraction);
     });
     expect(seen.length).toBeGreaterThan(3);
@@ -190,15 +217,15 @@ describe('the analyser on made-up songs', () => {
 
 describe('audio that cannot be charted', () => {
   it('refuses silence politely', () => {
-    expect(() => analyze(new Float32Array(SAMPLE_RATE * 20), NORMAL)).toThrow(AnalysisError);
+    expect(() => analyze(new Float32Array(SAMPLE_RATE * 20), MEDIUM)).toThrow(AnalysisError);
   });
 
   it('refuses audio that is too short', () => {
-    expect(() => analyze(new Float32Array(SAMPLE_RATE * 2), NORMAL)).toThrow(/too short/);
+    expect(() => analyze(new Float32Array(SAMPLE_RATE * 2), MEDIUM)).toThrow(/too short/);
   });
 
   it('refuses a song that is too long', () => {
-    expect(() => analyze(new Float32Array(SAMPLE_RATE * (MAX_SECONDS + 1)), NORMAL)).toThrow(/minutes long/);
+    expect(() => analyze(new Float32Array(SAMPLE_RATE * (MAX_SECONDS + 1)), MEDIUM)).toThrow(/minutes long/);
   });
 });
 

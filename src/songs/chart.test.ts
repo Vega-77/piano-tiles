@@ -148,7 +148,7 @@ describe('making a song from a chart', () => {
   });
 
   it('keeps what the tuning panel needs to start from', () => {
-    expect(songFromChart(chartFile(), folder).imported).toEqual({ nudge: 0, manualBpm: false, level: 'normal', confidence: undefined, warnings: [] });
+    expect(songFromChart(chartFile(), folder).imported).toEqual({ nudge: 0, manualBpm: false, level: 'medium', confidence: undefined, warnings: [] });
 
     const analysis = { confidence: 0.8, drift: 0.01, manualBpm: true, peakRate: 3, tiles: 5, rows: 100, density: 0.3, level: 'hard', warnings: ['Very fast.'] };
     expect(songFromChart(chartFile({ analysis, nudge: -0.03 }), folder).imported).toEqual({
@@ -160,7 +160,9 @@ describe('making a song from a chart', () => {
     });
 
     // A level the app doesn't know is shown as the middle one rather than trusted.
-    expect(songFromChart(chartFile({ analysis: { ...analysis, level: 'insane' } }), folder).imported?.level).toBe('normal');
+    expect(songFromChart(chartFile({ analysis: { ...analysis, level: 'insane' } }), folder).imported?.level).toBe('medium');
+    // Charts saved before the levels moved up a step called what is now Easy "normal".
+    expect(songFromChart(chartFile({ analysis: { ...analysis, level: 'normal' } }), folder).imported?.level).toBe('easy');
   });
 });
 

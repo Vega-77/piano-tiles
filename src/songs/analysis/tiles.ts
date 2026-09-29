@@ -3,8 +3,19 @@ import { percentile } from './dsp';
 import { ENV_LAG, FPS, type Features } from './features';
 import { AnalysisError, type Grid, rowLength } from './grid';
 
-export type Density = 'easy' | 'normal' | 'hard';
-export const DENSITIES: readonly Density[] = ['easy', 'normal', 'hard'];
+export type Density = 'easy' | 'medium' | 'hard';
+export const DENSITIES: readonly Density[] = ['easy', 'medium', 'hard'];
+/** What a song is charted at when nothing else is asked for. */
+export const DEFAULT_DENSITY: Density = 'medium';
+
+/**
+ * A level as it was saved with a chart, read back. Charts saved before the levels moved up one
+ * called what is now Easy "normal"; anything unrecognised is the default.
+ */
+export function densityFrom(saved: unknown): Density {
+  if (saved === 'normal') return 'easy';
+  return DENSITIES.find((level) => level === saved) ?? DEFAULT_DENSITY;
+}
 
 interface Settings {
   /** Fewest rows between two tiles. */
@@ -17,9 +28,9 @@ interface Settings {
 }
 
 export const DENSITY: Record<Density, Settings> = {
-  easy: { gap: 2, fraction: 0.28, doubles: 0.0, holds: 0.12 },
-  normal: { gap: 2, fraction: 0.4, doubles: 0.03, holds: 0.12 },
-  hard: { gap: 1, fraction: 0.52, doubles: 0.06, holds: 0.1 },
+  easy: { gap: 2, fraction: 0.4, doubles: 0.03, holds: 0.12 },
+  medium: { gap: 1, fraction: 0.52, doubles: 0.06, holds: 0.1 },
+  hard: { gap: 1, fraction: 0.66, doubles: 0.12, holds: 0.1 },
 };
 
 /** Taps per second no chart is allowed to ask for. */

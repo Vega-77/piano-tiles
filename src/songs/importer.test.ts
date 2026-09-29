@@ -58,7 +58,6 @@ function setup(seconds = 10) {
     store: async () => store,
     decoder: async () => fakeDecoded(seconds, { sampleRate: 22050 }),
     analyse,
-    reserved: ['twinkle'],
   };
   return { store, heard, tools };
 }
@@ -105,7 +104,7 @@ describe('adding a song from a recording', () => {
     expect(audio!.type).toBe('audio/mpeg');
     expect(heard).toHaveLength(1);
     expect(heard[0].samples).toBe(10 * 22050);
-    expect(heard[0].options).toEqual({ density: 'normal', bpm: undefined });
+    expect(heard[0].options).toEqual({ density: 'medium', bpm: undefined });
   });
 
   it('uses the name, artist, tempo and busyness it was given', async () => {
@@ -123,13 +122,13 @@ describe('adding a song from a recording', () => {
     expect(second.audio).toBe(first.audio);
   });
 
-  it('never reuses an id, its own songs’ or the built-in ones’', async () => {
+  it('never reuses the id of a song already on the device', async () => {
     const { tools } = setup();
     const ids = [];
-    for (const name of ['Song.mp3', 'Song.mp3', 'song.mp3', 'Twinkle.mp3']) {
+    for (const name of ['Song.mp3', 'Song.mp3', 'song.mp3', 'Other.mp3']) {
       ids.push((await addSong(fakeFile(500, name), {}, {}, tools)).id);
     }
-    expect(ids).toEqual(['song', 'song-2', 'song-3', 'twinkle-2']);
+    expect(ids).toEqual(['song', 'song-2', 'song-3', 'other']);
   });
 
   it('keeps a video’s sound as a WAV, not the video', async () => {
@@ -314,13 +313,6 @@ describe('moving a song to another device', () => {
     expect(added.id).toBe('road-trip-2');
     expect(await other.store.charts()).toHaveLength(2);
     expect((await saved(other.store, chart.id)).title).toBe('Someone else’s');
-  });
-
-  it('keeps a song file from taking the id of a built-in song', async () => {
-    const { blob } = await exported();
-    const other = setup();
-    other.tools.reserved = ['road-trip'];
-    expect((await addSong(new File([blob], 'x.pianotiles'), {}, {}, other.tools)).id).toBe('road-trip-2');
   });
 
   it('refuses a song file that is damaged', async () => {

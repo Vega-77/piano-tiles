@@ -1,6 +1,8 @@
 # Piano Tiles
 
-A mobile-responsive Piano Tiles clone with a rhythm twist. Pick a song and a full backing track (melody, drums, bass and chords) plays continuously while tiles fall down four lanes in time with it. Tap each tile as it lines up with the timing bar: the closer, the more points, and a run of perfects multiplies everything. Every time the song ends it comes round again, much faster.
+A mobile-responsive Piano Tiles clone with a rhythm twist. Add a song of your own (an mp4 or any audio file) and it plays continuously while tiles fall down four lanes in time with its beat. Tap each tile as it lines up with the timing bar: the closer, the more points, and a run of perfects multiplies everything. Every time the song ends it comes round again, faster.
+
+There are no songs built in: the game starts empty, and the songs are the ones you add (see [Adding songs](#adding-songs)).
 
 **Play online: https://vega-77.github.io/piano-tiles/**
 
@@ -46,11 +48,11 @@ Each perfect extends your **chain**; anything less resets it to zero. Every 8 pe
 
 ### The music
 
-Each song is a whole arrangement: a lead melody, kick, snare and hi-hats, a bass line and chords. It plays continuously on its own, scheduled on the audio clock, and **never reacts to your taps**, so when you tap has no effect on what you hear. Tiles arrive at the bar exactly on the melody's beats, and the drums and bass keep going through the gaps. Four soft ticks, one a beat apart, count you in, with a big 4-3-2-1 on screen.
+The song is the original recording. It plays continuously, on the audio clock, and **never reacts to your taps**, so when you tap has no effect on what you hear. Tiles arrive at the bar on the beats the analyser found, and the music keeps going through the gaps. A count-in of four beats, with a big 4-3-2-1 on screen, comes before the first tile.
 
 ### Laps and speed
 
-Every song opens at a brisk tempo of its own. Each time the song finishes a lap, the tiles **and the tempo** jump to 1.2× the previous lap's speed: 1.0×, 1.2×, 1.44×, 1.73×, 2.07×, and so on. The multiplier is `LAP_SPEED_FACTOR ** lap` in `src/config.ts`.
+Every song opens at a brisk tempo of its own. Each time the song finishes a lap, the tiles **and the tempo** speed up by another 0.2× of the *first* lap's speed: 1.0×, 1.2×, 1.4×, 1.6×, 1.8×, and so on. It is added, not compounded, so lap *n* runs at `1 + LAP_SPEED_STEP × n` (`LAP_SPEED_STEP` is in `src/config.ts`).
 
 **A break before every jump.** The last tiles of a lap scroll away, then there is a short rest (`LAP_REST_SECONDS`, 1.5 s at the new speed), then four beats of count-in at the *new* tempo, so you hear the speed you are about to play at before the first tile arrives. The new lap's banner and speed show at the start of the break, and nothing can be missed during it.
 
@@ -64,37 +66,14 @@ Every song opens at a brisk tempo of its own. Each time the song finishes a lap,
 
 Best score, best chain and most laps are saved per song in `localStorage`.
 
-## Songs
-
-| Song | Difficulty | BPM | Features |
-| --- | --- | --- | --- |
-| Twinkle Twinkle Little Star | Beginner | 112 | Gaps, holds |
-| Ode to Joy | Easy | 132 | Gaps, holds |
-| Für Elise | Medium | 80 | Gaps, holds, doubles |
-| Rondo Alla Turca | Hard | 90 | Gaps, holds, doubles |
-| In the Hall of the Mountain King | Expert | 102 | Gaps, holds, doubles |
-
-Songs live in `src/songs/songs.ts`, written bar by bar on an eighth-note grid (one row = one eighth note). The melody uses these tokens, with bars ended by `|` or a new line:
-
-```
-E4        a tap tile (one row)
-C4+E4     a double: two tiles at once (plays both notes)
-G4~       a hold tile, 2 rows tall
-G4~3      a hold tile, 3 rows tall (2–4 allowed)
-.         a rest: one row with nothing to tap
-.3        a rest three rows long
-```
-
-Every song also gives one chord per bar (two joined with `/` to change halfway) and a **groove**: a drum, bass and chord pattern with one character per row of the bar, for example `kick: 'x...x...'`, `bass: '1...5...'` (`1` root, `5` fifth, `8` octave). To add a song, append an entry with a title, composer, `difficulty` (1–5), `bpm`, `rowsPerBeat`, `rowsPerBar`, two theme hues, `notes`, `chords` and a `groove`. The loader refuses a bar that doesn't add up, and the tests check that every song is well formed, has gaps, plays as a full band, and starts at a proper pace.
-
 ## Adding songs
 
-Drop in an mp4 (or mp3, m4a, wav, ogg, flac, mov, webm, anything with an audio track) and the tiles are laid out on its beat. The original recording plays instead of the built-in synth, and each lap it plays 1.2× faster along with the tiles (the pitch rises with it).
+The game has no songs of its own: you add them. Drop in an mp4 (or mp3, m4a, wav, ogg, flac, mov, webm, anything with an audio track) and the tiles are laid out on its beat. The original recording plays, and each lap it plays faster along with the tiles (the pitch rises with it).
 
 It all happens **in the browser, on the device you are holding**. There is nothing to install and no command to run, so it works the same on the published site, on a phone, or on a computer you have never used before:
 
 1. Drop the file anywhere on the song list, or tap **Add your own song** and choose it. The listening takes a few seconds for a typical song (a progress bar shows how far along it is, with a Cancel button).
-2. The new song appears in the list, charted at Normal. Play it. If it doesn't feel right, tap **Tune** on the "Added" message, or **Tune this song** under the song's card (below).
+2. The new song appears in the list, charted at Medium. Play it. If it doesn't feel right, tap **Tune** on the "Added" message, or **Tune this song** under the song's card (below).
 
 The file never leaves the device: it isn't uploaded anywhere, and it isn't added to this repository.
 
@@ -122,7 +101,7 @@ Every added song has a **Tune** screen of its own, opened with **Tune this song*
 | --- | --- |
 | **Sync** slider (±250 ms) + **Save** | The tiles reach the bar a little before or after the beat you hear. Bluetooth speakers and headphones add delay of their own, so this is often the first thing to try. |
 | **Tempo** | The tiles drift away from the music, or the detected tempo is half or double the real one. Type the right BPM, then **Re-chart**. **Find the tempo again** goes back to automatic. |
-| **Easy / Normal / Busy** + **Re-chart** | There are too many or too few tiles. **Re-chart** is always available, so you can also use it to lay the tiles out again with the latest analyser without changing anything else. |
+| **Easy / Medium / Hard** + **Re-chart** | There are too many or too few tiles. Easy leaves a free row between tiles; Medium and Hard allow tiles in neighbouring rows, with Hard the fullest (and the most doubles). **Re-chart** is always available, so you can also use it to lay the tiles out again with the latest analyser without changing anything else. A song keeps the tiles it has until you re-chart it, so songs added before the levels moved up one keep their old tiles until then. |
 | **Name** + **Save** | To rename it. |
 | **Save song file** | To take the song to another device, or keep a backup. |
 | **Remove song…** | To take it out of this device (asks first). |
@@ -142,7 +121,7 @@ The 60fps loop lives outside React so per-frame movement never triggers a render
 
 - `Timeline` says when every row of the song reaches the bar (and how the tempo steps up each lap).
 - Each frame the engine reads the clock and places every tile from it, so a tile's position is a pure function of time.
-- The whole backing track is scheduled ahead on that same clock, row by row, so tiles and audio can't drift apart.
+- The recording plays on that same clock (its playback rate steps up with each lap), so tiles and audio can't drift apart.
 - A tap is graded only by `tap time − the time its tile was centred on the bar`.
 - Pausing suspends the audio clock, which freezes tiles and music together.
 
@@ -152,15 +131,15 @@ The 60fps loop lives outside React so per-frame movement never triggers a render
 | `src/game/engine.ts` | Frame loop, beat layout (gaps included), tap/double/hold rules, judgments, chains, laps |
 | `src/game/renderer.ts` | Owns the tile DOM nodes; positions are written straight to `transform` |
 | `src/game/effects.ts` | Canvas visuals: animated backdrop, the timing bar, hit bursts, ripples, popups, banners |
-| `src/game/audio.ts` | Web Audio synth: piano-ish lead, kick, snare, hats, bass, chord stabs and pad |
+| `src/game/audio.ts` | Web Audio: plays a song's recording at each lap's speed. It also has a small synth (lead, drums, bass, chords) for a song that has notes instead of a recording, which the tests use |
 | `src/game/storage.ts` | Per-song best score, chain and laps |
-| `src/songs/` | Song library, note-notation parser, and the arrangement builder that turns melody + chords + groove into a full track |
+| `src/songs/` | Note-notation parser and the arrangement builder (used by the synth path and the tests), and `songs.ts`, the numbers the screens show about a song |
 | `src/songs/analysis/` | The in-browser analyser for added songs: spectral onsets, tempo and beat grid, tile placement (`analyze.ts` and friends), run in a worker (`analyzer.worker.ts`, `client.ts`) |
 | `src/songs/` (added songs) | `decode.ts` reads a file's audio, `importer.ts` adds / re-charts / tunes / removes a song, `store.ts` keeps songs in IndexedDB, `bundle.ts` is the `.pianotiles` song file, `chart.ts` and `library.ts` turn stored charts into playable songs |
 | `src/components/` | The screens and overlays: song list (`SongSelect`, `ImportPanel`, `JobStatus`), the separate `TuneScreen`, the HUD, pause and game over |
 | `src/hooks/useGame.ts` | Bridges the engine to React; state updates only on start, each score, each lap, pause and game over |
 | `src/index.css` | Tile looks and animations, switched by `data-kind` / `data-state` attributes |
-| `src/config.ts` | Tunables: timing windows, points, chain steps, lap speed factor |
+| `src/config.ts` | Tunables: timing windows, points, chain steps, lap speed step |
 
 Tile positions are percentages of board height (`yPos`, 0–100), so the game looks identical at any screen size. Visual effects respect `prefers-reduced-motion`.
 

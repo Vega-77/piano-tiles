@@ -26,7 +26,7 @@ export function useGame(songs: readonly Song[]) {
   const [state, setState] = useState<GameState>(createInitialState);
   const [lastRun, setLastRun] = useState<GameOverResult | null>(null);
   const [stats, setStats] = useState<StatsMap>(loadStats);
-  const [selectedId, setSelectedId] = useState(songs[0].id);
+  const [pickedId, setSelectedId] = useState<string | null>(null);
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -34,10 +34,13 @@ export function useGame(songs: readonly Song[]) {
     songsRef.current = songs;
   }, [songs]);
 
+  // The song highlighted in the menu. A song that isn't there (not read yet, or just removed) can't
+  // be highlighted: the first song stands in, and there is none while the library is empty.
+  const selectedId = songs.some((song) => song.id === pickedId) ? pickedId : (songs[0]?.id ?? null);
+
   // What the theme colours follow: the song being played, or the one highlighted in the menu.
-  // (A song that was just removed can still be selected for a moment: the first song stands in.)
   const wanted = state.status === 'menu' ? selectedId : state.songId;
-  const activeSong: Song = songs.find((song) => song.id === wanted) ?? songs[0];
+  const activeSong: Song | undefined = songs.find((song) => song.id === wanted);
 
   useEffect(() => {
     const bg = bgRef.current;
@@ -100,7 +103,7 @@ export function useGame(songs: readonly Song[]) {
   }, []);
 
   useEffect(() => {
-    effectsRef.current?.setTheme(activeSong.hue, activeSong.hue2);
+    if (activeSong) effectsRef.current?.setTheme(activeSong.hue, activeSong.hue2);
   }, [activeSong]);
 
   const start = useCallback(async (songId: string) => {

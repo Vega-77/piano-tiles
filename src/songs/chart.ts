@@ -1,5 +1,6 @@
 import { MAX_HOLD_ROWS, MIN_HOLD_ROWS, TILE_HEIGHT } from '../config';
 import type { BeatSpec, Difficulty, Song } from '../types';
+import { densityFrom } from './analysis/tiles';
 import { beatRows } from './notation';
 
 /**
@@ -49,7 +50,7 @@ export interface ChartAnalysis {
   rows: number;
   /** Tiles per row of the song, roughly the setting the user picked. */
   density: number;
-  /** The setting the user picked: easy, normal or hard. */
+  /** The setting the user picked: easy, medium or hard (older charts say "normal" for easy). */
   level?: string;
   /** What the analyser thought was wrong, if anything, in words. */
   warnings?: string[];
@@ -245,7 +246,7 @@ export function songFromChart(chart: ChartFile, folderUrl: string): Song {
     imported: {
       nudge: chart.nudge ?? 0,
       manualBpm: chart.analysis?.manualBpm ?? false,
-      level: chart.analysis?.level === 'easy' || chart.analysis?.level === 'hard' ? chart.analysis.level : 'normal',
+      level: densityFrom(chart.analysis?.level),
       confidence: chart.analysis?.confidence,
       warnings: chart.analysis?.warnings ?? [],
     },

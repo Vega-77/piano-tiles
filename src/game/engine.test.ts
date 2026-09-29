@@ -7,7 +7,7 @@ import {
   GOOD_WINDOW,
   HOLD_TICK_POINTS,
   LAP_REST_SECONDS,
-  LAP_SPEED_FACTOR,
+  LAP_SPEED_STEP,
   LEAD_ROWS,
   OK_WINDOW,
   PERFECT_WINDOW,
@@ -22,6 +22,9 @@ import { noopFx, type Fx } from './effects';
 import { comboMultiplier, GameEngine, judge, type GameOverResult } from './engine';
 import { getBest } from './storage';
 import { Timeline } from './timeline';
+
+/** How much faster than the first lap the given lap runs: 1, 1.2, 1.4, 1.6... */
+const speed = (lap: number) => 1 + LAP_SPEED_STEP * lap;
 
 // ---- a controllable song clock; the fake Sound reads it, and each "frame" runs the real loop ----
 let songTime = 0;
@@ -345,7 +348,7 @@ describe('the music', () => {
     throughBreak(engine);
     const later = scheduled.slice(before);
     expect(later.length).toBeGreaterThan(0);
-    for (const item of later) expect(item.secondsPerRow).toBeCloseTo(1 / (rate * LAP_SPEED_FACTOR), 9);
+    for (const item of later) expect(item.secondsPerRow).toBeCloseTo(1 / (rate * speed(1)), 9);
   });
 
   it('is cut off when the game ends', () => {
@@ -396,7 +399,7 @@ describe('a recorded song', () => {
       return engine.getState().lap >= 2;
     });
     goTo(timeline.lapStart(2) - 0.5); // through the rest, into the count-in of lap 2
-    expect(played.map((p) => p.rate)).toEqual([1, LAP_SPEED_FACTOR, LAP_SPEED_FACTOR ** 2]);
+    expect(played.map((p) => p.rate)).toEqual([1, 2, 3].map((n) => expect.closeTo(speed(n - 1), 9)));
 
     // Every lap, row `k` of the recording (offset + k rows in) arrives exactly when its tile is due.
     const rowSeconds = 1 / rate;
@@ -781,14 +784,14 @@ describe('hold tiles', () => {
 });
 
 describe('laps: the song ends and everything speeds up', () => {
-  it('jumps the speed by a fixed factor each time the song finishes', () => {
+  it('adds 0.2x to the speed each time the song finishes: 1x, 1.2x, 1.4x, 1.6x', () => {
     const { engine, calls, states } = setup(manyTaps(4));
     playPerfectly(engine, () => engine.getState().lap >= 3);
     expect(engine.getState().status).toBe('playing');
     const speeds = [0, 1, 2, 3].map((lap) => states.find((s) => s.lap === lap)?.speedMultiplier);
-    expect(speeds).toEqual([1, 1.2, 1.44, 1.73]);
+    expect(speeds).toEqual([1, 1.2, 1.4, 1.6]);
     expect(calls.levelUps).toBe(3);
-    expect(engine.getState().speedMultiplier).toBe(Math.round(LAP_SPEED_FACTOR ** 3 * 100) / 100);
+    expect(engine.getState().speedMultiplier).toBe(1.6);
   });
 
   it('starts the next lap after a rest and a count-in, and plays it faster', () => {
@@ -802,7 +805,7 @@ describe('laps: the song ends and everything speeds up', () => {
     const lap0Gap = melody[1].at - melody[0].at;
     const lap1 = melody.filter((n) => n.at >= timeline.lapEnd(0));
     expect(lap1[0].at).toBeCloseTo(lap1Start, 9);
-    expect(lap1[1].at - lap1[0].at).toBeCloseTo(lap0Gap / LAP_SPEED_FACTOR, 9);
+    expect(lap1[1].at - lap1[0].at).toBeCloseTo(lap0Gap / speed(1), 9);
   });
 
   it('makes tiles fall faster on later laps', () => {
@@ -812,7 +815,7 @@ describe('laps: the song ends and everything speeds up', () => {
     const tile = must(nextBeat(engine)[0]);
     const y1 = tile.yPos;
     goTo(songTime + 0.1);
-    expect(tile.yPos - y1).toBeCloseTo(SPEED * LAP_SPEED_FACTOR * 0.1, 5);
+    expect(tile.yPos - y1).toBeCloseTo(SPEED * speed(1) * 0.1, 5);
   });
 
   it('keeps the timing windows the same in seconds, so a perfect is still a perfect', () => {
@@ -849,7 +852,7 @@ describe('laps: the song ends and everything speeds up', () => {
     it('names the new lap and its speed as soon as the break begins, and resets the progress bar', () => {
       const { engine } = setup(manyTaps(8), { arrangement });
       playPerfectly(engine, () => engine.getState().lap >= 1);
-      expect(engine.getState()).toMatchObject({ lap: 1, speedMultiplier: LAP_SPEED_FACTOR, progress: 0 });
+      expect(engine.getState()).toMatchObject({ lap: 1, speedMultiplier: speed(1), progress: 0 });
       throughBreak(engine);
       tapAt(engine, nextBeat(engine)[0], 0);
       tapAt(engine, nextBeat(engine)[0], 0);
