@@ -1,8 +1,19 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TILE_HEIGHT } from '../config';
 import type { Song } from '../types';
 import { chartRows, formatChart, parseChart, playOffset, publicationOf, rowSeconds, songFromChart, validateChart, type ChartFile } from './chart';
 import { beatRows } from './notation';
+
+/** The switch for double holds lives in the config: this lets a test turn it on and off. */
+const flags = vi.hoisted(() => ({ doubleHolds: false }));
+vi.mock('../config', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../config')>();
+  return { ...original, get DOUBLE_HOLDS() { return flags.doubleHolds; } };
+});
+
+afterEach(() => {
+  flags.doubleHolds = false;
+});
 
 const rowsOf = (source: string) => parseChart(source).reduce((sum, beat) => sum + beatRows(beat), 0);
 
@@ -143,6 +154,36 @@ describe('making a song from a chart', () => {
     expect(() => songFromChart(chartFile({ chart: `x .${wanted}` }), folder)).not.toThrow(); // wanted + 1 rows
     expect(() => songFromChart(chartFile({ chart: `x .${wanted + 1}` }), folder)).toThrow(/room for/);
     expect(rowsOf(`x .${wanted}`)).toBe(wanted + 1);
+  });
+
+  describe('with double holds switched off', () => {
+    const chart = 'x . xx~3 . . x xx~2 x . . xx . .';
+
+    it('plays each one as an ordinary hold of the same length, so no row moves', () => {
+      const song = songFromChart(chartFile({ chart }), folder);
+      expect(song.beats.filter((beat) => beat.type === 'doublehold')).toEqual([]);
+      const kept = parseChart(chart);
+      const untilTheEnd = kept.slice(0, -1); // (the rest that ends the chart is stretched to fill the recording)
+      expect(song.beats.slice(0, untilTheEnd.length).map((beat) => [beat.type, beatRows(beat)])).toEqual(
+        untilTheEnd.map((beat) => [beat.type === 'doublehold' ? 'hold' : beat.type, beatRows(beat)]),
+      );
+      expect(song.beats.filter((beat) => beat.type === 'hold')).toEqual([
+        { type: 'hold', freq: 0, rows: 3 },
+        { type: 'hold', freq: 0, rows: 2 },
+      ]);
+      expect(song.beats.filter((beat) => beat.type === 'double')).toHaveLength(1); // (a plain double stays one)
+    });
+
+    it('still reads them in the chart, so a chart that has them is not changed', () => {
+      expect(parseChart(chart).filter((beat) => beat.type === 'doublehold')).toHaveLength(2);
+      expect(formatChart(parseChart(chart)).split(/\s+/)).toContain('xx~3');
+    });
+
+    it('lays them as they are written when they are switched back on', () => {
+      flags.doubleHolds = true;
+      const song = songFromChart(chartFile({ chart }), folder);
+      expect(song.beats.filter((beat) => beat.type === 'doublehold')).toHaveLength(2);
+    });
   });
 
   it('refuses a chart with no tiles', () => {

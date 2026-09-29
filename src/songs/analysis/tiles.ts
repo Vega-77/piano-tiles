@@ -1,4 +1,4 @@
-import { MAX_HOLD_ROWS, MIN_HOLD_ROWS } from '../../config';
+import { DOUBLE_HOLDS, MAX_HOLD_ROWS, MIN_HOLD_ROWS } from '../../config';
 import { percentile } from './dsp';
 import { ENV_LAG, FPS, type Features } from './features';
 import { AnalysisError, type Grid, rowLength } from './grid';
@@ -250,7 +250,7 @@ export function chooseTiles(features: Features, grid: Grid, rows: number, level:
 
   // Double holds: some of the holds, on the hits the most of the sound agrees on, kept well apart.
   const doubleRows = new Uint8Array(rows + 1); // (the rows a double or a double hold covers)
-  const doubleHoldCap = held.length < 2 ? 0 : Math.max(1, Math.round(settings.doubleHolds * held.length));
+  const doubleHoldCap = !DOUBLE_HOLDS || held.length < 2 ? 0 : Math.max(1, Math.round(settings.doubleHolds * held.length));
   const doubleHolds: number[] = [];
   for (const k of [...held].sort((a, b) => agree[b] - agree[a] || strength[b] - strength[a] || a - b)) {
     if (doubleHolds.length >= doubleHoldCap) break;

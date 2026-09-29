@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { movingAverage, percentile, resampleMono } from './dsp';
 import { AnalysisError, DENSITIES, MAX_SECONDS, analyze, hueOf, type Measured } from './analyze';
 import { ENV_LAG, FPS, SAMPLE_RATE, computeFeatures, type Features } from './features';
@@ -11,6 +11,17 @@ import { DEFAULT_DENSITY, DENSITY, beatOffset, densityFrom } from './tiles';
  * These run the analyser on songs made here, where the true tempo and the first beat are known, so
  * a change that breaks the timing fails a test rather than a song.
  */
+
+/** The switch for double holds lives in the config: this lets a test turn it on and off. */
+const flags = vi.hoisted(() => ({ doubleHolds: false }));
+vi.mock('../../config', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../../config')>();
+  return { ...original, get DOUBLE_HOLDS() { return flags.doubleHolds; } };
+});
+
+afterEach(() => {
+  flags.doubleHolds = false;
+});
 
 const SLOW = 60_000;
 const rowsPerSecond = (chart: Measured) => (chart.bpm * chart.rowsPerBeat) / 60;
@@ -135,6 +146,19 @@ describe('the analyser on made-up songs', () => {
   });
 
   describe('double holds', () => {
+    beforeEach(() => {
+      flags.doubleHolds = true; // (they are switched off in the game for now; these are for when they come back)
+    });
+
+    it('are not laid at all while they are switched off, and the holds stay holds', () => {
+      flags.doubleHolds = false;
+      for (const density of DENSITIES) {
+        const tokens = analyze(songs.b.samples!, { density }).chart.split(/\s+/).filter(Boolean);
+        expect(tokens.filter((token) => token.startsWith('xx~'))).toEqual([]);
+        expect(tokens.filter((token) => /^x~\d+$/.test(token)).length).toBeGreaterThanOrEqual(2);
+      }
+    }, SLOW);
+
     /** Where each hold and double hold starts (in rows), and how long it is. */
     const holdsIn = (chart: Measured) => {
       const found: { double: boolean; row: number; rows: number }[] = [];

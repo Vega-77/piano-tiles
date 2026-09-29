@@ -1,4 +1,4 @@
-import { MAX_HOLD_ROWS, MIN_HOLD_ROWS, TILE_HEIGHT } from '../config';
+import { DOUBLE_HOLDS, MAX_HOLD_ROWS, MIN_HOLD_ROWS, TILE_HEIGHT } from '../config';
 import type { BeatSpec, Difficulty, Publication, Song } from '../types';
 import { lengthFrom } from './analysis/length';
 import { densityFrom } from './analysis/tiles';
@@ -234,13 +234,19 @@ export function playOffset(chart: Pick<ChartFile, 'offset' | 'nudge'>): number {
   return chart.offset + (chart.nudge ?? 0);
 }
 
+/** With double holds switched off, each is played as one ordinary hold of the same length, so no row moves. */
+function withoutDoubleHolds(beats: BeatSpec[]): BeatSpec[] {
+  if (DOUBLE_HOLDS) return beats;
+  return beats.map((beat): BeatSpec => (beat.type === 'doublehold' ? { type: 'hold', freq: beat.freqs[0], rows: beat.rows } : beat));
+}
+
 /**
  * Turns a chart into a playable song. The lap is exactly as many rows as the audio needs (short
  * charts are padded with rests), so the recording and the tiles start each lap together and the
  * recording's last beat is the lap's last row.
  */
 export function songFromChart(chart: ChartFile, folderUrl: string): Song {
-  const beats = parseChart(chart.chart);
+  const beats = withoutDoubleHolds(parseChart(chart.chart));
   const offset = playOffset(chart);
   const rows = beats.reduce((sum, beat) => sum + beatRows(beat), 0);
   // (A chart may run a row over: the analyser rounds its last row up.)

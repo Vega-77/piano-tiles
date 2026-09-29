@@ -22,7 +22,7 @@ npm run preview  # serve the production build
 
 ## How to play
 
-- **Touch / mouse:** tap in a lane to hit the next tile in that lane. Where you tap in the lane doesn't matter, only when. Every finger counts on its own, so doubles and double holds are played with two fingers; a mouse has only one pointer, so use the keyboard (or a touchscreen) for a double hold.
+- **Touch / mouse:** tap in a lane to hit the next tile in that lane. Where you tap in the lane doesn't matter, only when. Every finger counts on its own, so doubles are played with two fingers (and double holds too, if they are switched back on); a mouse has only one pointer, so use the keyboard (or a touchscreen) for a double.
 - **Keyboard:** `D` `F` `J` `K` are lanes 1–4. `Esc` pauses.
 - The board is empty through a four-beat count-in (a big 4-3-2-1, with a tick on each beat) before the first tile arrives, and every later lap starts with a break and another count-in (see below).
 - Tiles come in rhythm, so there are **gaps**: rows with nothing to tap. Wait through them.
@@ -42,7 +42,9 @@ The glowing bar is where the **middle of each tile** should be when you tap it. 
 | **OK** (within 250 ms), early or late | 25 |
 | **Further off than that** | The tile doesn't line up with the bar: **game over** |
 
-**Double holds get longer to be grabbed late.** They are the hardest tile to get two fingers onto, so both halves may still be grabbed up to 500 ms after the bar (as an OK); every other tile is missed after 250 ms. Early, a double hold is as strict as any tile.
+**Double holds are switched off for now** (`DOUBLE_HOLDS` in `src/config.ts`): they did not make the game better. The analyser lays none, and a chart that has some (the published songs do) plays each as an ordinary hold of the same length, so nothing moves and no song needs re-charting. Everything for them is still in the game and the notation; setting `DOUBLE_HOLDS` to `true` brings them back.
+
+**Double holds get longer to be grabbed late.** (While they are on.) They are the hardest tile to get two fingers onto, so both halves may still be grabbed up to 500 ms after the bar (as an OK); every other tile is missed after 250 ms. Early, a double hold is as strict as any tile.
 
 A Good or OK hit also shows a coloured tag under its name, **blue EARLY** or **orange LATE**, so you can tell which way you missed; a perfect hit has none.
 
@@ -73,7 +75,7 @@ Every song opens at a brisk tempo of its own. Each time the song finishes a lap,
 | **Tap** | Tap it as it lines up with the bar. |
 | **Double** | Two tiles in the same row, exactly one lane apart (lanes 1 & 3, or 2 & 4), joined by a glowing bar. Tap both, in either order; each is graded on its own. Common at every level: up to about one tile in eight on Easy, one in five on Medium and more than one in four on Hard. |
 | **Hold** (gold, 2–4 rows tall) | Press as its head lines up with the bar (graded like a tap) and keep holding. It pays out a tick every half row for as long as you hold, worth more the longer it is. **Letting go early never ends the game**: you just stop earning ticks. Tapping the next tile also lets go of the hold. |
-| **Double hold** | Two holds in the same row, one lane apart, joined by the glowing bar at their heads. Press both heads (each is graded on its own) and keep both down; each pays its own ticks, and lifting one finger early only stops that one (the other is still the one being held, so the next tile can be tapped without ending the run). Rarer than the other tiles: about a quarter to two-fifths of a song's holds, never two within 16 rows. |
+| **Double hold** (switched off for now, see above; a chart's are played as plain holds) | Two holds in the same row, one lane apart, joined by the glowing bar at their heads. Press both heads (each is graded on its own) and keep both down; each pays its own ticks, and lifting one finger early only stops that one (the other is still the one being held, so the next tile can be tapped without ending the run). Rarer than the other tiles: about a quarter to two-fifths of a song's holds, never two within 16 rows. |
 
 Best score, best chain and most laps are saved per song in `localStorage`, and a run's score also goes on the song's [leaderboard](#leaderboards-and-nicknames).
 
@@ -147,7 +149,7 @@ The web config is public and lives in `src/cloud/config.ts` (it is not a secret;
 
 The analyser finds the tempo and where the first beat falls, then puts the tiles on a fixed grid from there. It looks for sudden jumps in the sound (it doesn't tell instruments apart) and puts a tile on the strongest hits that fall on the grid, keeping a gap between tiles and leaving rests where the music is quiet.
 
-The tiles are spread with a **quota per stretch of music**: every eight beats gets a share of the tiles (about 60% of what the difficulty allows, taken from that stretch's own strongest hits), and only what is left over goes to the loudest hits anywhere. That is what keeps a quiet verse from being emptied out by a loud chorus, while a truly silent stretch (a break, a fade) still gets none. A chorus still ends up busier than a verse, because it has more strong hits to choose from. Hits that land on the beat are slightly preferred. A hit followed by sustained sound with nothing struck over it becomes a hold, and on the hits the most of the sound agrees on, some of the holds (25 % on Easy, 30 % on Medium, 40 % on Hard, at least one when there are two or more) become double holds, kept 16 rows apart. Doubles go on the hardest hits, where the low, middle and high of the sound all land together, and they are handed out through the song a stretch at a time (the same eight-beat stretches as the quota), so they turn up in every part of it rather than only in the loudest. They are capped at 12 % of the tiles on Easy, 20 % on Medium and 28 % on Hard, and never fall on two rows in a row. It does not transcribe the melody, so the tiles follow the *rhythm* rather than the notes.
+The tiles are spread with a **quota per stretch of music**: every eight beats gets a share of the tiles (about 60% of what the difficulty allows, taken from that stretch's own strongest hits), and only what is left over goes to the loudest hits anywhere. That is what keeps a quiet verse from being emptied out by a loud chorus, while a truly silent stretch (a break, a fade) still gets none. A chorus still ends up busier than a verse, because it has more strong hits to choose from. Hits that land on the beat are slightly preferred. A hit followed by sustained sound with nothing struck over it becomes a hold, and, only while `DOUBLE_HOLDS` is on (it is off for now), on the hits the most of the sound agrees on, some of the holds (25 % on Easy, 30 % on Medium, 40 % on Hard, at least one when there are two or more) become double holds, kept 16 rows apart. Doubles go on the hardest hits, where the low, middle and high of the sound all land together, and they are handed out through the song a stretch at a time (the same eight-beat stretches as the quota), so they turn up in every part of it rather than only in the loudest. They are capped at 12 % of the tiles on Easy, 20 % on Medium and 28 % on Hard, and never fall on two rows in a row. It does not transcribe the melody, so the tiles follow the *rhythm* rather than the notes.
 
 The first row is placed on a beat, not wherever the recording happens to begin, so the count-in ticks and the lap's first tile share the song's pulse.
 

@@ -33,6 +33,12 @@ export const GOOD_WINDOW = 0.18;
  */
 export const OK_WINDOW = 0.25;
 /**
+ * Whether songs have double holds. They are switched off for now: they did not make the game any better to play, so the
+ * analyser lays none and a chart that has one (`xx~3`) is played with an ordinary hold of the same length, which keeps
+ * every row, and so all the timing, where it was. Everything else about them is still there to switch back on.
+ */
+export const DOUBLE_HOLDS = false;
+/**
  * A double hold takes two fingers down at once, and it is the tile that players find hardest to get to in time, so
  * both halves may be grabbed this much later than the bar (still as an OK). Early, they are as strict as any tile.
  */

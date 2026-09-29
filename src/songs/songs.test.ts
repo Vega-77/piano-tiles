@@ -1,8 +1,19 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TILE_HEIGHT } from '../config';
 import { songFromChart } from './chart';
 import { DIFFICULTY_LABELS, songBars, songFeatures, songRows, songSeconds } from './songs';
 import { fakeChart } from './testing';
+
+/** The switch for double holds lives in the config: this lets a test turn it on and off. */
+const flags = vi.hoisted(() => ({ doubleHolds: false }));
+vi.mock('../config', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../config')>();
+  return { ...original, get DOUBLE_HOLDS() { return flags.doubleHolds; } };
+});
+
+afterEach(() => {
+  flags.doubleHolds = false;
+});
 
 const folder = 'https://example.test/songs/demo/';
 
@@ -29,8 +40,14 @@ describe('what the screens say about a song', () => {
   });
 
   it('counts a double hold as both a double and a hold', () => {
+    flags.doubleHolds = true;
     const chart = fakeChart('twin', { chart: 'x . xx~3 . .', duration: 4 });
     expect(songFeatures(songFromChart(chart, folder))).toEqual({ doubles: true, holds: true });
+  });
+
+  it('counts one that is switched off as the plain hold it is played as', () => {
+    const chart = fakeChart('twin', { chart: 'x . xx~3 . .', duration: 4 });
+    expect(songFeatures(songFromChart(chart, folder))).toEqual({ doubles: false, holds: true });
   });
 
   it('names every difficulty from 1 to 5', () => {
