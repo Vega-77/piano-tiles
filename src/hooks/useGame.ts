@@ -4,6 +4,7 @@ import { AudioEngine } from '../game/audio';
 import { Effects } from '../game/effects';
 import { createInitialState, GameEngine, type GameOverResult } from '../game/engine';
 import { loadStats, type StatsMap } from '../game/storage';
+import { readStoredAudio } from '../songs/store';
 import type { GameState, Song } from '../types';
 
 const LANE_KEYS: Record<string, number> = { KeyD: 0, KeyF: 1, KeyJ: 2, KeyK: 3 };
@@ -46,7 +47,7 @@ export function useGame(songs: readonly Song[]) {
 
     const effects = new Effects(bg, fx, stageRef.current);
     effects.start();
-    const audio = new AudioEngine();
+    const audio = new AudioEngine({ read: readStoredAudio });
     const engine = new GameEngine({
       layer,
       audio,

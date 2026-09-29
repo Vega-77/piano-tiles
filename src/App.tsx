@@ -10,7 +10,6 @@ import { TunePanel } from './components/TunePanel';
 import { useGame } from './hooks/useGame';
 import { useImporter } from './hooks/useImporter';
 import { useLibrary } from './hooks/useLibrary';
-import { CAN_IMPORT } from './songs/importer';
 import type { Song } from './types';
 
 /** A file dropped anywhere the menu isn't would otherwise replace the game with the file. */
@@ -53,15 +52,15 @@ export default function App() {
     [remove, library.songs, setSelectedId],
   );
 
-  const canTune = CAN_IMPORT && importer.tools?.available === true;
   const tuner = (song: Song) =>
-    canTune && song.imported ? (
+    song.imported ? (
       <TunePanel
         key={song.id}
         song={song}
         busy={working !== null}
         onTune={importer.tune}
         onRechart={importer.rechart}
+        onSave={importer.save}
         onRemove={removeSong}
       />
     ) : null;
@@ -109,11 +108,11 @@ export default function App() {
               loadingId={game.loadingId}
               loadError={game.loadError}
               problems={library.problems}
-              onDropFile={CAN_IMPORT ? addSong : undefined}
+              onDropFile={addSong}
               adder={
                 <ImportPanel
-                  tools={importer.tools}
                   busy={working !== null}
+                  persistent={library.persistent}
                   choices={importer.choices}
                   onChoices={importer.setChoices}
                   onFile={addSong}
@@ -124,6 +123,7 @@ export default function App() {
                   working={working}
                   error={importer.error}
                   added={importer.added}
+                  persistent={library.persistent}
                   onCancel={importer.cancel}
                   onDismiss={importer.dismiss}
                 />

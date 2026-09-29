@@ -54,7 +54,17 @@ export interface Sound {
   playLevelUp(): void;
 }
 
+export interface AudioEngineOptions {
+  /**
+   * Gives the bytes of a recording that isn't fetched from the network (one saved on this device),
+   * or undefined for any other URL. It rejects if the recording should be there and isn't.
+   */
+  read?: (url: string) => Promise<ArrayBuffer | undefined>;
+}
+
 export class AudioEngine implements Sound {
+  constructor(private readonly options: AudioEngineOptions = {}) {}
+
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
   private songBus: GainNode | null = null;
@@ -117,17 +127,38 @@ export class AudioEngine implements Sound {
     if (!ctx) return; // No Web Audio: the game runs silently, as it does for the synth.
     let pending = this.recordings.get(url);
     if (!pending) {
-      pending = fetch(url)
-        .then((response) => {
-          if (!response.ok) throw new Error(`Couldn't load the song's audio (${response.status})`);
-          return response.arrayBuffer();
-        })
-        .then((data) => ctx.decodeAudioData(data));
+      pending = this.bytes(url)
+        .then((data) => ctx.decodeAudioData(data))
+        .catch((error: unknown) => {
+          if (error instanceof DOMException && error.name === 'EncodingError') {
+            throw new Error("This device couldn't decode the song's audio.");
+          }
+          throw error;
+        });
       this.recordings.set(url, pending);
       // Don't cache a failure: a retry should try again.
       pending.catch(() => this.recordings.delete(url));
     }
-    this.decoded.set(url, await pending);
+    const buffer = await pending;
+    // Only the song being played is kept: a decoded song is tens of megabytes.
+    for (const other of [...this.decoded.keys()]) {
+      if (other !== url) this.forget(other);
+    }
+    this.decoded.set(url, buffer);
+  }
+
+  /** Where a recording's bytes come from: saved on this device if it says so, else the network. */
+  private async bytes(url: string): Promise<ArrayBuffer> {
+    const saved = await this.options.read?.(url);
+    if (saved) return saved;
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`Couldn't load the song's audio (${response.status})`);
+    return response.arrayBuffer();
+  }
+
+  private forget(url: string): void {
+    this.decoded.delete(url);
+    this.recordings.delete(url);
   }
 
   playRecording(url: string, at: number, rate: number): void {

@@ -5,12 +5,14 @@ interface JobStatusProps {
   working: Working | null;
   error: string | null;
   added: ChartFile | null;
+  /** False when this browser can't keep songs. */
+  persistent: boolean;
   onCancel: () => void;
   onDismiss: () => void;
 }
 
-/** What the song tools are doing, or just did: progress with a way to stop it, the new song, or what went wrong. */
-export function JobStatus({ working, error, added, onCancel, onDismiss }: JobStatusProps) {
+/** What is being done to a song, or just was: progress with a way to stop it, the new song, or what went wrong. */
+export function JobStatus({ working, error, added, persistent, onCancel, onDismiss }: JobStatusProps) {
   if (working) {
     return (
       <div role="status" className="rise-in mx-4 mb-2 rounded-2xl bg-white/10 p-3 text-sm ring-1 ring-white/15">
@@ -22,6 +24,19 @@ export function JobStatus({ working, error, added, onCancel, onDismiss }: JobSta
           <div className="min-w-0 flex-1">
             <p className="truncate font-semibold">{working.what}</p>
             <p className="truncate text-xs text-white/60">{working.stage}</p>
+            <div
+              role="progressbar"
+              aria-label={working.what}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round(working.fraction * 100)}
+              className="mt-1.5 h-1 overflow-hidden rounded-full bg-white/15"
+            >
+              <div
+                className="h-full rounded-full bg-white/80 transition-[width] duration-200"
+                style={{ width: `${Math.round(Math.max(0, Math.min(1, working.fraction)) * 100)}%` }}
+              />
+            </div>
           </div>
           <button
             type="button"
@@ -60,7 +75,9 @@ export function JobStatus({ working, error, added, onCancel, onDismiss }: JobSta
             </p>
           ))}
           <p className="mt-1 text-xs text-white/55">
-            It is saved in <code>public/songs</code>: commit it to keep it.
+            {persistent
+              ? 'Saved on this device. To play it somewhere else, open “Tune this song” and save the song file.'
+              : 'This browser can’t keep songs, so it is gone when you close the page.'}
           </p>
         </div>
         <button type="button" onClick={onDismiss} className="btn-ghost shrink-0 rounded-full px-3 py-1 text-xs font-bold">

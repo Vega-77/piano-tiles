@@ -14,17 +14,20 @@ interface TunePanelProps {
   busy: boolean;
   onTune: (id: string, options: TuneOptions) => void;
   onRechart: (id: string, options: RechartOptions) => void;
+  /** Saves the song, audio included, as a file that can be added on another device. */
+  onSave: (id: string) => void;
   onRemove: (id: string) => void;
 }
 
 const signed = (ms: number) => (ms > 0 ? `+${ms}` : String(ms));
 
 /**
- * Fixes for an imported song that doesn't feel right: move the music against the tiles, give it
- * a tempo by hand, ask for more or fewer tiles, or take it out. Key it on the song. After a save
- * the fields start again from what is on disk, but the panel itself stays open for the next try.
+ * Fixes for a song added on this device that doesn't feel right: move the music against the tiles,
+ * give it a tempo by hand, ask for more or fewer tiles, take it to another device, or take it out.
+ * Key it on the song. After a save the fields start again from what is stored, but the panel
+ * itself stays open for the next try.
  */
-export function TunePanel({ song, busy, onTune, onRechart, onRemove }: TunePanelProps) {
+export function TunePanel({ song, busy, onTune, onRechart, onSave, onRemove }: TunePanelProps) {
   const info = song.imported;
   const savedNudge = Math.round((info?.nudge ?? 0) * 1000);
   const savedLevel = info?.level ?? 'normal';
@@ -187,9 +190,19 @@ export function TunePanel({ song, busy, onTune, onRechart, onRemove }: TunePanel
         </div>
 
         <div className="border-t border-white/10 pt-3">
+          <span className="mb-1 block font-semibold text-white/85">On another device</span>
+          <p className="mb-2 leading-snug text-white/45">
+            This song lives in this browser only. Save it as a file, then choose that file with “Add a song” on the other device.
+          </p>
+          <button type="button" className={small} disabled={busy} onClick={() => onSave(song.id)}>
+            Save song file
+          </button>
+        </div>
+
+        <div className="border-t border-white/10 pt-3">
           {confirming ? (
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-white/80">Delete this song and its audio?</span>
+              <span className="text-white/80">Delete this song and its audio from this device?</span>
               <button
                 type="button"
                 disabled={busy}

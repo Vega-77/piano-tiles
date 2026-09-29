@@ -1,216 +1,335 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
+import type { Analyser } from './analysis/client';
+import type { Measured } from './analysis/analyze';
+import { unpackSong } from './bundle';
 import type { ChartFile } from './chart';
-import { checkTools, ImportError, importSong, lineSplitter, readJob, rechartSong, removeSong, tuneSong, type Stage } from './importer';
+import { Cancelled, ImportError } from './errors';
+import {
+  addSong,
+  exportSong,
+  rechartSong,
+  removeSong,
+  slugify,
+  titleFromFileName,
+  tuneSong,
+  uniqueId,
+  type Stage,
+  type Tools,
+} from './importer';
+import { createMemoryStore } from './store';
+import { fakeDecoded, fakeFile } from './testing';
 
-const base = 'http://localhost:5173/';
-const encoder = new TextEncoder();
-
-function chart(overrides: Partial<ChartFile> = {}): ChartFile {
-  return {
-    version: 1,
-    id: 'demo',
-    title: 'Demo',
-    artist: 'Imported',
-    audio: 'audio-1a2b3c4d.mp3',
-    bpm: 120,
-    rowsPerBeat: 2,
-    offset: 0.1,
-    duration: 30,
-    difficulty: 2,
-    hue: 200,
-    hue2: 255,
-    chart: 'x . x .',
-    ...overrides,
-  };
+interface Heard {
+  samples: number;
+  options: Parameters<Analyser>[1];
 }
 
-const line = (event: unknown) => `${JSON.stringify(event)}\n`;
-
-/** A response that arrives in the given pieces, so a test can cut it wherever it likes. */
-function streamed(pieces: (string | Uint8Array)[], status = 200): Response {
-  return new Response(
-    new ReadableStream({
-      start(controller) {
-        for (const piece of pieces) controller.enqueue(typeof piece === 'string' ? encoder.encode(piece) : piece);
-        controller.close();
+/** Tools with nothing real behind them: sound is a sine wave, and "analysing" answers straight away. */
+function setup(seconds = 10) {
+  const store = createMemoryStore();
+  const heard: Heard[] = [];
+  const analyse: Analyser = async (samples, options, onProgress) => {
+    heard.push({ samples: samples.length, options });
+    onProgress?.({ stage: 'listen', message: 'Listening for hits', fraction: 0 });
+    onProgress?.({ stage: 'chart', message: 'Placing the tiles', fraction: 1 });
+    const result: Measured = {
+      bpm: options.bpm ?? 120,
+      rowsPerBeat: 2,
+      offset: 0.1,
+      duration: seconds,
+      difficulty: 3,
+      chart: 'x . x . xx',
+      analysis: {
+        confidence: 0.9,
+        drift: 0.01,
+        manualBpm: options.bpm !== undefined,
+        peakRate: 2,
+        tiles: 3,
+        rows: 20,
+        density: 0.15,
+        level: options.density,
+        warnings: [],
       },
-    }),
-    { status },
-  );
+    };
+    return result;
+  };
+  const tools: Tools = {
+    store: async () => store,
+    decoder: async () => fakeDecoded(seconds, { sampleRate: 22050 }),
+    analyse,
+    reserved: ['twinkle'],
+  };
+  return { store, heard, tools };
 }
 
-interface Call {
-  url: string;
-  init: RequestInit;
-}
+const saved = async (store: ReturnType<typeof setup>['store'], id: string) => (await store.chart(id)) as ChartFile;
 
-function fakeFetch(respond: (call: Call) => Response | Promise<Response>) {
-  const calls: Call[] = [];
-  const fetcher = (async (input: string, init: RequestInit = {}) => {
-    const call = { url: String(input), init };
-    calls.push(call);
-    return respond(call);
-  }) as typeof fetch;
-  return { calls, fetcher };
-}
+describe('names and ids', () => {
+  it('makes an id from a name', () => {
+    expect(slugify('My Great Song!')).toBe('my-great-song');
+    expect(slugify('  --Mötley Crüe--  ')).toBe('m-tley-cr-e');
+    expect(slugify('日本語')).toBe('song');
+    expect(slugify('a'.repeat(100)).length).toBe(48);
+  });
 
-const done = (c: ChartFile) => line({ event: 'done', chart: c });
+  it('finds a free id', () => {
+    expect(uniqueId('song', new Set())).toBe('song');
+    expect(uniqueId('song', new Set(['song']))).toBe('song-2');
+    expect(uniqueId('song', new Set(['song', 'song-2', 'song-3']))).toBe('song-4');
+    expect(uniqueId('x'.repeat(64), new Set(['x'.repeat(60)])).length).toBeLessThanOrEqual(64);
+  });
 
-describe('splitting lines', () => {
-  it('holds back a line until it is whole', () => {
-    const lines = lineSplitter();
-    expect(lines.push('{"a":1}\n{"b"')).toEqual(['{"a":1}']);
-    expect(lines.push(':2}\r\n')).toEqual(['{"b":2}']);
-    expect(lines.push('tail')).toEqual([]);
-    expect(lines.flush()).toEqual(['tail']);
-    expect(lines.flush()).toEqual([]);
+  it('takes a name from a file name', () => {
+    expect(titleFromFileName('My_Great__Song.mp4')).toBe('My Great Song');
+    expect(titleFromFileName('archive.tar.gz')).toBe('archive.tar');
+    expect(titleFromFileName('.mp3')).toBe('Untitled');
+    expect(titleFromFileName('no-extension')).toBe('no-extension');
   });
 });
 
-describe('reading a job', () => {
-  it('reports each stage and returns the done event', async () => {
+describe('adding a song from a recording', () => {
+  it('saves its chart and its audio on this device, and returns the chart', async () => {
+    const { store, heard, tools } = setup();
+    const file = fakeFile(500, 'My_Great Song.mp3', 'audio/mpeg');
+    const chart = await addSong(file, {}, {}, tools);
+
+    expect(chart).toMatchObject({ id: 'my-great-song', title: 'My Great Song', artist: 'Imported', bpm: 120, difficulty: 3, duration: 10 });
+    expect(chart.audio).toMatch(/^audio-[0-9a-f]{8}\.mp3$/);
+    expect(chart.hue).toBeGreaterThanOrEqual(0);
+    expect(chart.hue).toBeLessThan(360);
+    expect(chart.hue2).toBe((chart.hue + 55) % 360);
+    expect(await saved(store, 'my-great-song')).toEqual(chart);
+    const audio = await store.audio('my-great-song');
+    expect(audio!.size).toBe(500);
+    expect(audio!.type).toBe('audio/mpeg');
+    expect(heard).toHaveLength(1);
+    expect(heard[0].samples).toBe(10 * 22050);
+    expect(heard[0].options).toEqual({ density: 'normal', bpm: undefined });
+  });
+
+  it('uses the name, artist, tempo and busyness it was given', async () => {
+    const { heard, tools } = setup();
+    const chart = await addSong(fakeFile(500, 'x.mp3'), { title: '  Mine  ', artist: ' Me ', bpm: 128, density: 'hard' }, {}, tools);
+    expect(chart).toMatchObject({ id: 'mine', title: 'Mine', artist: 'Me', bpm: 128 });
+    expect(chart.analysis).toMatchObject({ manualBpm: true, level: 'hard' });
+    expect(heard[0].options).toEqual({ density: 'hard', bpm: 128 });
+  });
+
+  it('gives the same recording the same colours and audio name every time', async () => {
+    const first = await addSong(fakeFile(500, 'a.mp3'), {}, {}, setup().tools);
+    const second = await addSong(fakeFile(500, 'b.mp3'), {}, {}, setup().tools);
+    expect(second.hue).toBe(first.hue);
+    expect(second.audio).toBe(first.audio);
+  });
+
+  it('never reuses an id, its own songs’ or the built-in ones’', async () => {
+    const { tools } = setup();
+    const ids = [];
+    for (const name of ['Song.mp3', 'Song.mp3', 'song.mp3', 'Twinkle.mp3']) {
+      ids.push((await addSong(fakeFile(500, name), {}, {}, tools)).id);
+    }
+    expect(ids).toEqual(['song', 'song-2', 'song-3', 'twinkle-2']);
+  });
+
+  it('keeps a video’s sound as a WAV, not the video', async () => {
+    const { store, tools } = setup(6);
+    const chart = await addSong(fakeFile(5000, 'clip.mp4', 'video/mp4'), {}, {}, tools);
+    expect(chart.audio).toMatch(/\.wav$/);
+    const audio = await store.audio(chart.id);
+    expect(audio!.type).toBe('audio/wav');
+    expect(audio!.size).toBe(44 + 6 * 22050 * 2 * 2);
+  });
+
+  it('reports each step and finishes at the end of the bar', async () => {
+    const { tools } = setup();
     const stages: Stage[] = [];
-    const response = streamed([
-      line({ event: 'stage', stage: 'convert', message: 'Converting the audio' }),
-      line({ event: 'stage', stage: 'grid', message: 'Finding the beat' }),
-      line({ event: 'done', id: 'x' }),
-    ]);
-    expect(await readJob(response, (stage) => stages.push(stage))).toEqual({ event: 'done', id: 'x' });
-    expect(stages).toEqual([
-      { stage: 'convert', message: 'Converting the audio' },
-      { stage: 'grid', message: 'Finding the beat' },
-    ]);
+    await addSong(fakeFile(500, 'a.mp3'), {}, { onStage: (stage) => stages.push(stage) }, tools);
+    expect(stages.length).toBeGreaterThan(4);
+    expect(stages.every((stage, i) => i === 0 || stage.fraction >= stages[i - 1].fraction - 1e-9)).toBe(true);
+    expect(stages.at(-1)).toEqual({ message: 'Done', fraction: 1 });
+    expect(stages.map((stage) => stage.message)).toContain('Placing the tiles');
   });
 
-  it('copes with lines cut anywhere, even through a character', async () => {
-    const text = line({ event: 'stage', stage: 's', message: 'Listening – très bien 🎵' }) + line({ event: 'done', ok: true });
-    const bytes = encoder.encode(text);
-    const stages: Stage[] = [];
-    // One byte at a time is the worst case: every multi-byte character is cut.
-    const pieces = Array.from(bytes, (byte) => new Uint8Array([byte]));
-    expect(await readJob(streamed(pieces), (stage) => stages.push(stage))).toEqual({ event: 'done', ok: true });
-    expect(stages[0].message).toBe('Listening – très bien 🎵');
-  });
-
-  it('takes a last line that has no line break', async () => {
-    expect(await readJob(streamed(['{"event":"done","id":"x"}']))).toEqual({ event: 'done', id: 'x' });
-  });
-
-  it('turns an error event into an ImportError with the analyser’s words', async () => {
-    const response = streamed([line({ event: 'stage', stage: 'a', message: 'b' }), line({ event: 'error', message: 'That does not sound like music.' })]);
-    await expect(readJob(response)).rejects.toThrow('That does not sound like music.');
-    await expect(readJob(streamed([line({ event: 'error', message: 'No.' })], 409))).rejects.toBeInstanceOf(ImportError);
-  });
-
-  it('says so when the connection ends early, or when the server has no such door', async () => {
-    await expect(readJob(streamed([line({ event: 'stage', stage: 'a', message: 'b' })]))).rejects.toThrow(/closed before/);
-    await expect(readJob(streamed(['<html>Cannot POST</html>'], 404))).rejects.toThrow(/npm run dev/);
-    await expect(readJob(streamed([], 502))).rejects.toThrow(/502/);
-  });
-
-  it('ignores lines that are not events', async () => {
-    const response = streamed(['warning: something\n', 'null\n', '42\n', line({ event: 'mystery' }), line({ event: 'done', id: 'x' })]);
-    expect(await readJob(response)).toEqual({ event: 'done', id: 'x' });
-  });
-});
-
-describe('importing a song', () => {
-  const file = new File([new Uint8Array(100)], 'My Song.mp4', { type: 'video/mp4' });
-
-  it('posts the file to the dev server with what was asked for, and returns the chart', async () => {
-    const { calls, fetcher } = fakeFetch(() => streamed([line({ event: 'stage', stage: 'x', message: 'Working' }), done(chart())]));
-    const stages: Stage[] = [];
-    const result = await importSong(file, { title: ' Mine ', bpm: 128, density: 'hard', artist: '' }, { fetcher, base, onStage: (s) => stages.push(s) });
-
-    expect(result).toEqual(chart());
-    expect(stages).toHaveLength(1);
-    expect(calls).toHaveLength(1);
-    const url = new URL(calls[0].url);
-    expect(url.origin + url.pathname).toBe('http://localhost:5173/__songs/import');
-    expect(Object.fromEntries(url.searchParams)).toEqual({ name: 'My Song.mp4', title: 'Mine', bpm: '128', density: 'hard' });
-    expect(calls[0].init.method).toBe('POST');
-    expect(calls[0].init.body).toBe(file);
-    expect((calls[0].init.headers as Record<string, string>)['X-Piano-Tiles']).toBe('1');
-  });
-
-  it('leaves out what was not given, so the analyser decides', async () => {
-    const { calls, fetcher } = fakeFetch(() => streamed([done(chart())]));
-    await importSong(file, {}, { fetcher, base });
-    expect(Object.fromEntries(new URL(calls[0].url).searchParams)).toEqual({ name: 'My Song.mp4' });
-  });
-
-  it('refuses an empty file, or one that is too big, without sending it', async () => {
-    const { calls, fetcher } = fakeFetch(() => streamed([done(chart())]));
-    await expect(importSong(new File([], 'a.mp3'), {}, { fetcher, base })).rejects.toThrow(/empty/);
+  it('turns away an empty file, a huge one and an impossible tempo before doing any work', async () => {
+    const { heard, tools } = setup();
+    const decoder = tools.decoder;
+    let decoded = 0;
+    tools.decoder = async (bytes) => {
+      decoded++;
+      return decoder(bytes);
+    };
+    await expect(addSong(fakeFile(0, 'a.mp3'), {}, {}, tools)).rejects.toThrow(/empty/);
     const huge = { size: 301 * 1024 * 1024, name: 'huge.mp4' } as File;
-    await expect(importSong(huge, {}, { fetcher, base })).rejects.toThrow(/300 MB/);
-    expect(calls).toHaveLength(0);
+    await expect(addSong(huge, {}, {}, tools)).rejects.toThrow(/300 MB/);
+    for (const bpm of [10, 1000, Number.NaN]) {
+      await expect(addSong(fakeFile(500, 'a.mp3'), { bpm }, {}, tools)).rejects.toThrow(/between 40 and 300/);
+    }
+    expect(decoded).toBe(0);
+    expect(heard).toHaveLength(0);
   });
 
-  it('refuses a chart the app could not play', async () => {
-    const { fetcher } = fakeFetch(() => streamed([line({ event: 'done', chart: { ...chart(), bpm: 9000 } })]));
-    await expect(importSong(file, {}, { fetcher, base })).rejects.toThrow(/Bad chart/);
+  it('saves nothing if the audio cannot be read or the song cannot be charted', async () => {
+    const { store, tools } = setup();
+    tools.decoder = async () => {
+      throw new DOMException('nope', 'EncodingError');
+    };
+    await expect(addSong(fakeFile(500, 'a.mp3'), {}, {}, tools)).rejects.toBeInstanceOf(ImportError);
+
+    const second = setup();
+    second.tools.analyse = async () => {
+      throw new ImportError('That does not sound like music.');
+    };
+    await expect(addSong(fakeFile(500, 'a.mp3'), {}, {}, second.tools)).rejects.toThrow('That does not sound like music.');
+    expect(await store.charts()).toEqual([]);
+    expect(await second.store.charts()).toEqual([]);
   });
 
-  it('explains a dev server that cannot be reached', async () => {
-    const fetcher = (async () => {
-      throw new TypeError('Failed to fetch');
-    }) as typeof fetch;
-    await expect(importSong(file, {}, { fetcher, base })).rejects.toThrow(/npm run dev/);
-  });
-
-  it('says it was cancelled when it was', async () => {
+  it('saves nothing when it is cancelled', async () => {
+    const { store, tools } = setup();
     const controller = new AbortController();
-    const fetcher = (async () => {
-      controller.abort();
-      throw new DOMException('aborted', 'AbortError');
-    }) as typeof fetch;
-    await expect(importSong(file, {}, { fetcher, base, signal: controller.signal })).rejects.toThrow('Cancelled.');
+    const analyse = tools.analyse;
+    tools.analyse = async (...args) => {
+      const result = await analyse(...args);
+      controller.abort(); // (the player pressed Cancel just as the analysis finished)
+      return result;
+    };
+    await expect(addSong(fakeFile(500, 'a.mp3'), {}, { signal: controller.signal }, tools)).rejects.toBeInstanceOf(Cancelled);
+    expect(await store.charts()).toEqual([]);
   });
 });
 
 describe('changing a saved song', () => {
-  it('re-charts, with the tempo and busyness asked for', async () => {
-    const { calls, fetcher } = fakeFetch(() => streamed([done(chart({ bpm: 90 }))]));
-    const result = await rechartSong('demo', { bpm: 90, density: 'easy' }, { fetcher, base });
-    expect(result.bpm).toBe(90);
-    expect(new URL(calls[0].url).pathname).toBe('/__songs/rechart');
-    expect(JSON.parse(calls[0].init.body as string)).toEqual({ id: 'demo', bpm: 90, density: 'easy' });
-    expect((calls[0].init.headers as Record<string, string>)['X-Piano-Tiles']).toBe('1');
+  async function withSong(title = 'Demo') {
+    const context = setup();
+    const chart = await addSong(fakeFile(500, `${title}.mp3`), { bpm: 100 }, {}, context.tools);
+    context.heard.length = 0;
+    return { ...context, chart };
+  }
+
+  it('re-charts with the tempo and busyness asked for, keeping the name, colours, audio and nudge', async () => {
+    const { store, heard, tools, chart } = await withSong();
+    await tuneSong(chart.id, { title: 'Renamed', nudgeMs: 40 }, {}, tools);
+    const again = await rechartSong(chart.id, { bpm: 90, density: 'easy' }, {}, tools);
+
+    expect(heard[0].options).toEqual({ density: 'easy', bpm: 90 });
+    expect(again).toMatchObject({ id: chart.id, title: 'Renamed', hue: chart.hue, hue2: chart.hue2, audio: chart.audio, nudge: 0.04, bpm: 90 });
+    expect(await saved(store, chart.id)).toEqual(again);
+    expect((await store.audio(chart.id))!.size).toBe(500);
   });
 
-  it('tunes the name and the sync nudge', async () => {
-    const { calls, fetcher } = fakeFetch(() => streamed([done(chart({ nudge: 0.03 }))]));
-    expect((await tuneSong('demo', { title: 'New', nudgeMs: 30 }, { fetcher, base })).nudge).toBe(0.03);
-    expect(new URL(calls[0].url).pathname).toBe('/__songs/tune');
-    expect(JSON.parse(calls[0].init.body as string)).toEqual({ id: 'demo', title: 'New', nudgeMs: 30 });
+  it('remembers a tempo given by hand, unless told to detect it again', async () => {
+    const { heard, tools, chart } = await withSong();
+    await rechartSong(chart.id, { density: 'hard' }, {}, tools);
+    expect(heard[0].options).toEqual({ density: 'hard', bpm: 100 });
+    await rechartSong(chart.id, { auto: true }, {}, tools);
+    expect(heard[1].options.bpm).toBeUndefined();
   });
 
-  it('removes a song', async () => {
-    const { calls, fetcher } = fakeFetch(() => streamed([line({ event: 'done', id: 'demo' })]));
-    await removeSong('demo', { fetcher, base });
-    expect(new URL(calls[0].url).pathname).toBe('/__songs/remove');
-    expect(JSON.parse(calls[0].init.body as string)).toEqual({ id: 'demo' });
+  it('keeps the busyness it had unless asked for another', async () => {
+    const { heard, tools, chart } = await withSong();
+    await rechartSong(chart.id, { density: 'easy' }, {}, tools);
+    await rechartSong(chart.id, {}, {}, tools);
+    expect(heard[1].options.density).toBe('easy');
+  });
+
+  it('says so when the song or its audio is gone', async () => {
+    const { store, tools, chart } = await withSong();
+    await expect(rechartSong('nothing', {}, {}, tools)).rejects.toThrow(/no longer on this device/);
+    await store.save({ ...chart, id: 'lost' });
+    await expect(rechartSong('lost', {}, {}, tools)).rejects.toThrow(/audio is no longer/);
+  });
+
+  it('renames, without any analysis, and can change the artist', async () => {
+    const { store, heard, tools, chart } = await withSong();
+    const tuned = await tuneSong(chart.id, { title: '  New name ', artist: ' Someone ' }, {}, tools);
+    expect(tuned).toMatchObject({ title: 'New name', artist: 'Someone' });
+    expect((await saved(store, chart.id)).title).toBe('New name');
+    expect(heard).toHaveLength(0);
+    expect((await tuneSong(chart.id, { artist: '  ' }, {}, tools)).artist).toBe('Imported');
+    await expect(tuneSong(chart.id, { title: '   ' }, {}, tools)).rejects.toThrow(/needs a name/);
+  });
+
+  it('moves the audio against the tiles by up to half a second, and zero puts it back', async () => {
+    const { store, tools, chart } = await withSong();
+    expect((await tuneSong(chart.id, { nudgeMs: -35.5 }, {}, tools)).nudge).toBe(-0.0355);
+    expect((await saved(store, chart.id)).nudge).toBe(-0.0355);
+    const back = await tuneSong(chart.id, { nudgeMs: 0 }, {}, tools);
+    expect(back.nudge).toBeUndefined();
+    expect('nudge' in (await saved(store, chart.id))).toBe(false);
+    await expect(tuneSong(chart.id, { nudgeMs: 501 }, {}, tools)).rejects.toThrow(/at most 500 ms/);
+    await expect(tuneSong(chart.id, { nudgeMs: Number.NaN }, {}, tools)).rejects.toThrow(/at most 500 ms/);
+    expect((await store.audio(chart.id))!.size).toBe(500);
+  });
+
+  it('removes a song and its audio', async () => {
+    const { store, tools, chart } = await withSong();
+    await removeSong(chart.id, {}, tools);
+    expect(await store.charts()).toEqual([]);
+    expect(await store.audio(chart.id)).toBeUndefined();
   });
 });
 
-describe('checking the tools', () => {
-  it('says whether the analyser is set up', async () => {
-    const ready = fakeFetch(() => Response.json({ available: true }));
-    expect(await checkTools({ fetcher: ready.fetcher, base })).toEqual({ available: true, message: undefined });
-    expect((ready.calls[0].init.headers as Record<string, string>)['X-Piano-Tiles']).toBe('1');
+describe('moving a song to another device', () => {
+  async function exported() {
+    const { store, tools } = setup();
+    const chart = await addSong(fakeFile(500, 'Road Trip.mp3', 'audio/mpeg'), {}, {}, tools);
+    await tuneSong(chart.id, { nudgeMs: 25 }, {}, tools);
+    const { blob, filename } = await exportSong(chart.id, tools);
+    return { store, tools, blob, filename, chart: await saved(store, chart.id) };
+  }
 
-    const missing = fakeFetch(() => Response.json({ available: false, message: 'Run setup.' }));
-    expect(await checkTools({ fetcher: missing.fetcher, base })).toEqual({ available: false, message: 'Run setup.' });
+  it('exports the chart and audio as one file named after the song', async () => {
+    const { blob, filename, chart } = await exported();
+    expect(filename).toBe('road-trip.pianotiles');
+    const opened = await unpackSong(blob);
+    expect(opened.chart).toEqual(chart);
+    expect(opened.audio.size).toBe(500);
   });
 
-  it('says so on a build with no dev server, or one that cannot be reached', async () => {
-    const notFound = fakeFetch(() => new Response('nope', { status: 404 }));
-    expect((await checkTools({ fetcher: notFound.fetcher, base })).available).toBe(false);
-    const down = (async () => {
-      throw new TypeError('Failed to fetch');
-    }) as typeof fetch;
-    expect((await checkTools({ fetcher: down, base })).available).toBe(false);
+  it('adds that file on a device that has nothing, exactly as it was, without listening to it again', async () => {
+    const { blob, filename, chart } = await exported();
+    const other = setup();
+    const added = await addSong(new File([blob], filename), {}, {}, other.tools);
+    expect(added).toEqual(chart);
+    expect(await saved(other.store, chart.id)).toEqual(chart);
+    expect((await other.store.audio(chart.id))!.size).toBe(500);
+    expect(other.heard).toHaveLength(0);
+  });
+
+  it('replaces the same song when its file is added again', async () => {
+    const { store, tools, blob, filename, chart } = await exported();
+    await tuneSong(chart.id, { title: 'Changed since' }, {}, tools);
+    const added = await addSong(new File([blob], filename), {}, {}, tools);
+    expect(added.id).toBe(chart.id);
+    expect(added.title).toBe(chart.title);
+    expect(await store.charts()).toHaveLength(1);
+  });
+
+  it('gives a different song with the same id an id of its own', async () => {
+    const { blob, filename, chart } = await exported();
+    const other = setup();
+    await other.store.save({ ...chart, audio: 'audio-ffffffff.mp3', title: 'Someone else’s' }, new Blob(['x']));
+    const added = await addSong(new File([blob], filename), {}, {}, other.tools);
+    expect(added.id).toBe('road-trip-2');
+    expect(await other.store.charts()).toHaveLength(2);
+    expect((await saved(other.store, chart.id)).title).toBe('Someone else’s');
+  });
+
+  it('keeps a song file from taking the id of a built-in song', async () => {
+    const { blob } = await exported();
+    const other = setup();
+    other.tools.reserved = ['road-trip'];
+    expect((await addSong(new File([blob], 'x.pianotiles'), {}, {}, other.tools)).id).toBe('road-trip-2');
+  });
+
+  it('refuses a song file that is damaged', async () => {
+    const { blob, filename } = await exported();
+    const cut = blob.slice(0, blob.size - 10);
+    await expect(addSong(new File([cut], filename), {}, {}, setup().tools)).rejects.toThrow(/cut short/);
+  });
+
+  it('will not export a song that is gone', async () => {
+    await expect(exportSong('nothing', setup().tools)).rejects.toBeInstanceOf(ImportError);
   });
 });

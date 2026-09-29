@@ -176,7 +176,7 @@ interface SongSelectProps {
   loadError?: string | null;
   /** Songs that were found but couldn't be loaded, in words. */
   problems?: readonly string[];
-  /** Given a file dropped on the menu; leave out where songs can't be added. */
+  /** Given a file dropped on the menu; leave out to turn dropping off. */
   onDropFile?: (file: File) => void;
   /** Below the songs: the way to add one. */
   adder?: ReactNode;
@@ -308,7 +308,7 @@ export function SongSelect({
           aria-hidden
         >
           <span className="text-2xl font-black">Drop it to add the song</span>
-          <span className="px-6 text-sm text-white/65">An mp4 or an audio file. One song at a time.</span>
+          <span className="px-6 text-sm text-white/65">An mp4, an audio file or a song file. One song at a time.</span>
         </div>
       )}
     </div>

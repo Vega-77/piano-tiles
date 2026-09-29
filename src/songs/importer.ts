@@ -1,36 +1,30 @@
-import { validateChart, type ChartFile } from './chart';
+import { fingerprintOf, type AnalyzeOptions } from './analysis/analyze';
+import { analyzeSamples, type Analyser } from './analysis/client';
+import type { Density } from './analysis/tiles';
+import { isSongFile, packSong, songFileName, unpackSong } from './bundle';
+import { MAX_NUDGE, validateChart, type ChartFile } from './chart';
+import { MAX_UPLOAD_MB, audioToKeep, browserDecoder, decodeToSamples, type Decoder, type StoredAudio } from './decode';
+import { Cancelled, ImportError } from './errors';
+import { SONGS } from './songs';
+import { MISSING_AUDIO, getSongStore, keepSongs, type SongStore } from './store';
 
 /**
- * The app's side of adding songs. While `npm run dev` runs, the dev server takes a song file,
- * runs the analyser on it (`tools/analyze.py`) and writes the result into `public/songs/`, where
- * it is committed like any other file. The published site has no analyser behind it, so it can
- * only play the songs that were committed.
+ * Adding, changing and removing the songs a player brings. The whole job happens in this browser:
+ * the file is decoded here, the beat is found by a worker here (analysis/), and the chart and audio
+ * are saved here (store.ts). Nothing is uploaded, and nothing needs installing.
  */
 
-/** Where the dev server answers, relative to the page. */
-const BRIDGE = '__songs/';
+export { DENSITIES, type Density } from './analysis/tiles';
+export { Cancelled, ImportError } from './errors';
+export { MAX_UPLOAD_MB } from './decode';
 
-/** Whether this build can add songs: only the dev server has the analyser behind it. */
-export const CAN_IMPORT: boolean = import.meta.env.DEV;
-
-/** The largest file the dev server takes (keep in step with `MAX_UPLOAD_BYTES` in tools/songs-bridge.ts). */
-export const MAX_UPLOAD_MB = 300;
-
-export type Density = 'easy' | 'normal' | 'hard';
-export const DENSITIES: readonly Density[] = ['easy', 'normal', 'hard'];
-
-/** Something that went wrong adding or changing a song, worded for the person who asked. */
-export class ImportError extends Error {}
-
+/** A step of a job, and how far through the whole job it is (0–1). */
 export interface Stage {
-  stage: string;
   message: string;
+  fraction: number;
 }
 
 export interface Job {
-  /** The page's `fetch` unless a test passes another. */
-  fetcher?: typeof fetch;
-  base?: string;
   signal?: AbortSignal;
   onStage?: (stage: Stage) => void;
 }
@@ -58,137 +52,233 @@ export interface TuneOptions {
   nudgeMs?: number;
 }
 
-// ---- reading the answer -----------------------------------------------------------------------
-
-/** Cuts a stream of text into lines, holding back a line until the end of it arrives. */
-export function lineSplitter() {
-  let rest = '';
-  return {
-    push(chunk: string): string[] {
-      const lines = (rest + chunk).split(/\r?\n/);
-      rest = lines.pop() ?? '';
-      return lines;
-    },
-    flush(): string[] {
-      const last = rest;
-      rest = '';
-      return last ? [last] : [];
-    },
-  };
+/** What a job needs from the outside world; tests pass their own. */
+export interface Tools {
+  store(): Promise<SongStore>;
+  decoder: Decoder;
+  analyse: Analyser;
+  /** Ids the built-in songs already have. */
+  reserved: readonly string[];
 }
 
-/** Reads the analyser's progress (one JSON event per line) and returns its `done` event. */
-export async function readJob(response: Response, onStage?: (stage: Stage) => void): Promise<Record<string, unknown>> {
-  let done: Record<string, unknown> | undefined;
-  let failure: string | undefined;
+export const defaultTools: Tools = {
+  store: getSongStore,
+  decoder: browserDecoder,
+  analyse: analyzeSamples,
+  reserved: SONGS.map((song) => song.id),
+};
 
-  const handle = (line: string) => {
-    let event: unknown;
-    try {
-      event = JSON.parse(line);
-    } catch {
-      return; // not one of ours
-    }
-    if (typeof event !== 'object' || event === null) return;
-    const e = event as Record<string, unknown>;
-    if (e.event === 'stage' && typeof e.message === 'string') onStage?.({ stage: String(e.stage ?? ''), message: e.message });
-    else if (e.event === 'done') done = e;
-    else if (e.event === 'error') failure = typeof e.message === 'string' ? e.message : 'Something went wrong.';
-  };
+const MIN_BPM = 40;
+const MAX_BPM = 300;
+const MAX_TEXT = 120;
 
-  const lines = lineSplitter();
-  if (response.body) {
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    for (;;) {
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      lines.push(decoder.decode(chunk.value, { stream: true })).forEach(handle);
-    }
-    lines.push(decoder.decode()).forEach(handle);
+// ---- small helpers ----------------------------------------------------------------------------
+
+export function slugify(text: string): string {
+  const slug = text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48)
+    .replace(/-+$/, '');
+  return slug || 'song';
+}
+
+/** `wanted`, or `wanted-2`, `wanted-3`... whichever is free. */
+export function uniqueId(wanted: string, taken: ReadonlySet<string>): string {
+  const base = wanted.slice(0, 60);
+  if (!taken.has(base)) return base;
+  for (let n = 2; ; n++) {
+    const candidate = `${base}-${n}`;
+    if (!taken.has(candidate)) return candidate;
   }
-  lines.flush().forEach(handle);
-
-  if (failure !== undefined) throw new ImportError(failure);
-  if (done) return done;
-  if (response.status === 404) throw new ImportError("This copy of the app can't add songs. Run it with `npm run dev`.");
-  throw new ImportError(response.ok ? 'The connection closed before the song was finished.' : `The dev server answered with ${response.status}.`);
 }
 
-type Request = Omit<RequestInit, 'headers'> & { headers?: Record<string, string> };
+/** A song's name from its file's: no ending, underscores as spaces. */
+export function titleFromFileName(name: string): string {
+  const title = name.replace(/\.[A-Za-z0-9]{1,5}$/, '').replace(/_+/g, ' ').replace(/\s+/g, ' ').trim();
+  return (title || 'Untitled').slice(0, MAX_TEXT);
+}
 
-async function call(path: string, init: Request, job: Job): Promise<Record<string, unknown>> {
-  const fetcher = job.fetcher ?? ((input, options) => fetch(input, options));
-  const url = new URL(`${BRIDGE}${path}`, job.base ?? document.baseURI).href;
-  let response: Response;
+const stager = (job: Job) => (message: string, fraction: number) =>
+  job.onStage?.({ message, fraction: Math.min(1, Math.max(0, fraction)) });
+
+function notCancelled(job: Job): void {
+  if (job.signal?.aborted) throw new Cancelled();
+}
+
+function checkFile(file: Blob): void {
+  if (file.size === 0) throw new ImportError('That file is empty.');
+  if (file.size > MAX_UPLOAD_MB * 1024 * 1024) throw new ImportError(`That file is over ${MAX_UPLOAD_MB} MB.`);
+}
+
+function checkBpm(bpm: number | undefined): void {
+  if (bpm !== undefined && (!Number.isFinite(bpm) || bpm < MIN_BPM || bpm > MAX_BPM)) {
+    throw new ImportError(`The tempo has to be between ${MIN_BPM} and ${MAX_BPM} beats per minute.`);
+  }
+}
+
+/** Ids in use: the built-in songs' and the saved ones'. */
+async function takenIds(store: SongStore, tools: Tools): Promise<Set<string>> {
+  const taken = new Set(tools.reserved);
+  for (const chart of await store.charts()) {
+    const id = (chart as { id?: unknown } | null)?.id;
+    if (typeof id === 'string') taken.add(id);
+  }
+  return taken;
+}
+
+async function savedChart(store: SongStore, id: string): Promise<ChartFile> {
+  const raw = await store.chart(id);
+  if (raw === undefined) throw new ImportError('That song is no longer on this device.');
   try {
-    // The header is what the dev server looks for to know a request came from the app itself.
-    response = await fetcher(url, { ...init, cache: 'no-store', signal: job.signal, headers: { ...init.headers, 'X-Piano-Tiles': '1' } });
-    return await readJob(response, job.onStage);
+    return validateChart(raw);
   } catch (error) {
-    if (error instanceof ImportError) throw error;
-    if (job.signal?.aborted) throw new ImportError('Cancelled.');
-    throw new ImportError("Couldn't reach the dev server. Is `npm run dev` still running?");
+    throw new ImportError(error instanceof Error ? error.message : 'That song could not be read.');
   }
 }
 
-function json(body: unknown): Request {
-  return { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
-}
+const levelOf = (chart: ChartFile): Density => (chart.analysis?.level === 'easy' || chart.analysis?.level === 'hard' ? chart.analysis.level : 'normal');
 
-function chartOf(done: Record<string, unknown>): ChartFile {
+function checked(chart: ChartFile): ChartFile {
   try {
-    return validateChart(done.chart);
+    return validateChart(chart);
   } catch (error) {
-    throw new ImportError(error instanceof Error ? error.message : 'The analyser sent back a song the app could not read.');
+    throw new ImportError(error instanceof Error ? error.message : 'The song could not be charted.');
   }
+}
+
+/** What is left of a song file once it has been listened to: kept small so the decoded sound can be let go. */
+async function prepare(file: File, job: Job, tools: Tools, share: number): Promise<{ samples: Float32Array; fingerprint: number; audio: StoredAudio }> {
+  const stage = stager(job);
+  const { samples, decoded } = await decodeToSamples(file, {
+    decoder: tools.decoder,
+    signal: job.signal,
+    onStep: (step) => stage(step.message, share * step.fraction),
+  });
+  return { samples, fingerprint: fingerprintOf(samples), audio: audioToKeep(file, decoded) };
 }
 
 // ---- what the app can ask for -----------------------------------------------------------------
 
-/** Whether the analyser is installed. (`message` says what to do if it isn't.) */
-export async function checkTools(job: Job = {}): Promise<{ available: boolean; message?: string }> {
-  const fetcher = job.fetcher ?? ((input, options) => fetch(input, options));
-  try {
-    const response = await fetcher(new URL(`${BRIDGE}status`, job.base ?? document.baseURI).href, {
-      cache: 'no-store',
-      signal: job.signal,
-      headers: { 'X-Piano-Tiles': '1' },
-    });
-    if (!response.ok) return { available: false, message: "This copy of the app can't add songs. Run it with `npm run dev`." };
-    const body = (await response.json()) as { available?: unknown; message?: unknown };
-    return { available: body.available === true, message: typeof body.message === 'string' ? body.message : undefined };
-  } catch {
-    return { available: false, message: "Couldn't reach the dev server." };
-  }
-}
+/**
+ * Adds a song from a recording (any audio or video file the browser can decode) or from a song
+ * file exported by this app. Resolves with the song's chart.
+ */
+export async function addSong(file: File, options: ImportOptions = {}, job: Job = {}, tools: Tools = defaultTools): Promise<ChartFile> {
+  checkFile(file);
+  checkBpm(options.bpm);
+  if (await isSongFile(file)) return addSongFile(file, job, tools);
 
-/** Sends a song file to be analysed and saved. Resolves with its chart. */
-export async function importSong(file: File, options: ImportOptions = {}, job: Job = {}): Promise<ChartFile> {
-  if (file.size === 0) throw new ImportError('That file is empty.');
-  if (file.size > MAX_UPLOAD_MB * 1024 * 1024) throw new ImportError(`That file is over ${MAX_UPLOAD_MB} MB.`);
-  const query = new URLSearchParams({ name: file.name });
-  const title = options.title?.trim();
-  const artist = options.artist?.trim();
-  if (title) query.set('title', title);
-  if (artist) query.set('artist', artist);
-  if (options.bpm !== undefined && Number.isFinite(options.bpm)) query.set('bpm', String(options.bpm));
-  if (options.density) query.set('density', options.density);
-  const done = await call(`import?${query}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file }, job);
-  return chartOf(done);
+  const stage = stager(job);
+  const store = await tools.store();
+  const { samples, fingerprint, audio } = await prepare(file, job, tools, 0.3);
+
+  const analyzeOptions: AnalyzeOptions = { density: options.density ?? 'normal', bpm: options.bpm };
+  const measured = await tools.analyse(samples, analyzeOptions, (progress) => stage(progress.message, 0.3 + 0.62 * (progress.fraction ?? 0)), job.signal);
+  notCancelled(job);
+
+  stage('Saving the song', 0.94);
+  const title = (options.title?.trim() || titleFromFileName(file.name)).slice(0, MAX_TEXT);
+  const id = uniqueId(slugify(title), await takenIds(store, tools));
+  const hue = (fingerprint >>> 8) % 360;
+  const chart = checked({
+    version: 1,
+    id,
+    title,
+    artist: options.artist?.trim().slice(0, MAX_TEXT) || 'Imported',
+    audio: `audio-${fingerprint.toString(16).padStart(8, '0')}.${audio.ext}`,
+    hue,
+    hue2: (hue + 55) % 360,
+    ...measured,
+  });
+  await store.save(chart, audio.blob);
+  void keepSongs();
+  stage('Done', 1);
+  return chart;
 }
 
 /** Puts the tiles of a saved song on the beat again, with another tempo or busyness. */
-export async function rechartSong(id: string, options: RechartOptions = {}, job: Job = {}): Promise<ChartFile> {
-  return chartOf(await call('rechart', json({ id, ...options }), job));
+export async function rechartSong(id: string, options: RechartOptions = {}, job: Job = {}, tools: Tools = defaultTools): Promise<ChartFile> {
+  checkBpm(options.bpm);
+  const stage = stager(job);
+  const store = await tools.store();
+  const old = await savedChart(store, id);
+  const audio = await store.audio(id);
+  if (!audio) throw new ImportError(MISSING_AUDIO);
+
+  const { samples } = await decodeToSamples(audio, {
+    decoder: tools.decoder,
+    signal: job.signal,
+    onStep: (step) => stage(step.message, 0.3 * step.fraction),
+  });
+  const keepsHandTempo = old.analysis?.manualBpm === true && !options.auto;
+  const analyzeOptions: AnalyzeOptions = { density: options.density ?? levelOf(old), bpm: options.bpm ?? (keepsHandTempo ? old.bpm : undefined) };
+  const measured = await tools.analyse(samples, analyzeOptions, (progress) => stage(progress.message, 0.3 + 0.65 * (progress.fraction ?? 0)), job.signal);
+  notCancelled(job);
+
+  stage('Saving the song', 0.97);
+  const title = options.title?.trim().slice(0, MAX_TEXT) || old.title;
+  // (Its name, colours, audio and hand-set nudge stay as they were.)
+  const chart = checked({ ...old, title, ...measured });
+  await store.save(chart);
+  stage('Done', 1);
+  return chart;
 }
 
 /** Changes a saved song's name, or moves its audio against its tiles (no analysis). */
-export async function tuneSong(id: string, options: TuneOptions, job: Job = {}): Promise<ChartFile> {
-  return chartOf(await call('tune', json({ id, ...options }), job));
+export async function tuneSong(id: string, options: TuneOptions, _job: Job = {}, tools: Tools = defaultTools): Promise<ChartFile> {
+  const store = await tools.store();
+  const chart: ChartFile = { ...(await savedChart(store, id)) };
+
+  if (options.title !== undefined) {
+    const title = options.title.trim().slice(0, MAX_TEXT);
+    if (!title) throw new ImportError('A song needs a name.');
+    chart.title = title;
+  }
+  if (options.artist !== undefined) chart.artist = options.artist.trim().slice(0, MAX_TEXT) || 'Imported';
+  if (options.nudgeMs !== undefined) {
+    const limit = MAX_NUDGE * 1000;
+    if (!Number.isFinite(options.nudgeMs) || Math.abs(options.nudgeMs) > limit) {
+      throw new ImportError(`The sync nudge can be at most ${limit} ms either way.`);
+    }
+    if (options.nudgeMs === 0) delete chart.nudge;
+    else chart.nudge = Math.round(options.nudgeMs * 10) / 10000;
+  }
+  await store.save(checked(chart));
+  return chart;
 }
 
 /** Deletes a saved song and its audio. */
-export async function removeSong(id: string, job: Job = {}): Promise<void> {
-  await call('remove', json({ id }), job);
+export async function removeSong(id: string, _job: Job = {}, tools: Tools = defaultTools): Promise<void> {
+  await (await tools.store()).remove(id);
+}
+
+/** A song as a file to keep or move to another device: its chart and audio together. */
+export async function exportSong(id: string, tools: Tools = defaultTools): Promise<{ blob: Blob; filename: string }> {
+  const store = await tools.store();
+  const chart = await savedChart(store, id);
+  const audio = await store.audio(id);
+  if (!audio) throw new ImportError(MISSING_AUDIO);
+  return { blob: packSong(chart, audio), filename: songFileName(chart) };
+}
+
+/** Adds a song from a song file. The same song again replaces what is saved; another song with the same id gets a new one. */
+async function addSongFile(file: File, job: Job, tools: Tools): Promise<ChartFile> {
+  const stage = stager(job);
+  stage('Opening the song file', 0.2);
+  const { chart, audio } = await unpackSong(file);
+  notCancelled(job);
+
+  const store = await tools.store();
+  const saved = (await store.charts()).find((raw) => (raw as { id?: unknown } | null)?.id === chart.id) as { audio?: unknown } | undefined;
+  let id = chart.id;
+  if (saved?.audio !== chart.audio) id = uniqueId(id, await takenIds(store, tools));
+
+  stage('Saving the song', 0.7);
+  const added = { ...chart, id };
+  await store.save(added, audio);
+  void keepSongs();
+  stage('Done', 1);
+  return added;
 }

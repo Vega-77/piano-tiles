@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import type { ChartFile } from '../songs/chart';
 import {
-  CAN_IMPORT,
-  checkTools,
-  importSong,
+  addSong,
+  Cancelled,
+  exportSong,
   ImportError,
   rechartSong,
   removeSong,
@@ -15,15 +15,11 @@ import {
   type TuneOptions,
 } from '../songs/importer';
 
-export interface ToolsStatus {
-  available: boolean;
-  message?: string;
-}
-
-/** What is being worked on, and the latest thing the analyser said about it. */
+/** What is being worked on, the latest thing the analyser said about it, and how far along it is (0 to 1). */
 export interface Working {
   what: string;
   stage: string;
+  fraction: number;
 }
 
 /** The choices for the next song to be added (kept here so a file dropped anywhere on the menu uses them). */
@@ -35,28 +31,28 @@ export interface ImportChoices {
 
 const DEFAULT_CHOICES: ImportChoices = { title: '', bpm: '', density: 'normal' };
 
+/** Hands a song file to the browser to save, the way a download link does. */
+function saveToDevice(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
 /**
- * Adding, tuning and removing songs through the dev server, one job at a time. `refresh` reads
- * the library again once a job has changed it.
+ * Adding, tuning, exporting and removing songs, one job at a time, all inside this browser.
+ * `refresh` reads the library again once a job has changed it.
  */
 export function useImporter(refresh: () => Promise<void>) {
-  const [tools, setTools] = useState<ToolsStatus | null>(null);
   const [working, setWorking] = useState<Working | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [added, setAdded] = useState<ChartFile | null>(null);
   const [choices, setChoices] = useState<ImportChoices>(DEFAULT_CHOICES);
   const running = useRef<AbortController | null>(null);
-
-  useEffect(() => {
-    if (!CAN_IMPORT) return;
-    let current = true;
-    void checkTools().then((status) => {
-      if (current) setTools(status);
-    });
-    return () => {
-      current = false;
-    };
-  }, []);
 
   const run = useCallback(
     async <T>(what: string, task: (job: Job) => Promise<T>): Promise<T | undefined> => {
@@ -64,13 +60,18 @@ export function useImporter(refresh: () => Promise<void>) {
       const controller = new AbortController();
       running.current = controller;
       setError(null);
-      setWorking({ what, stage: 'Sending…' });
+      setWorking({ what, stage: 'Starting…', fraction: 0 });
       try {
-        const result = await task({ signal: controller.signal, onStage: (stage) => setWorking({ what, stage: stage.message }) });
+        const result = await task({
+          signal: controller.signal,
+          onStage: (stage) => setWorking({ what, stage: stage.message, fraction: stage.fraction }),
+        });
         await refresh();
         return result;
       } catch (failure) {
-        setError(failure instanceof ImportError ? failure.message : 'Something went wrong.');
+        if (!(failure instanceof Cancelled)) {
+          setError(failure instanceof ImportError ? failure.message : 'Something went wrong.');
+        }
         return undefined;
       } finally {
         running.current = null;
@@ -80,25 +81,21 @@ export function useImporter(refresh: () => Promise<void>) {
     [refresh],
   );
 
-  /** Adds a song file, using the current choices. Resolves with its chart, or undefined if it failed. */
+  /** Adds a song file, using the current choices. Resolves with its chart, or undefined if it failed or was cancelled. */
   const add = useCallback(
     async (file: File): Promise<ChartFile | undefined> => {
-      if (!tools?.available) {
-        setError(tools?.message ?? 'The song tools are not ready.');
-        return undefined;
-      }
       const options: ImportOptions = { title: choices.title, density: choices.density };
       const bpm = Number(choices.bpm);
       if (choices.bpm.trim() !== '' && Number.isFinite(bpm)) options.bpm = bpm;
       setAdded(null);
-      const chart = await run(`Adding ${file.name}`, (job) => importSong(file, options, job));
+      const chart = await run(`Adding ${file.name}`, (job) => addSong(file, options, job));
       if (chart) {
         setAdded(chart);
         setChoices((old) => ({ ...old, title: '', bpm: '' })); // (the density carries over)
       }
       return chart;
     },
-    [tools, choices, run],
+    [choices, run],
   );
 
   const rechart = useCallback(
@@ -118,11 +115,20 @@ export function useImporter(refresh: () => Promise<void>) {
     [run],
   );
 
+  /** Saves the song, its audio and its tuning as one file, to be added on another device. */
+  const save = useCallback(
+    async (id: string) => {
+      const file = await run('Saving the song file', async () => exportSong(id));
+      if (file) saveToDevice(file.blob, file.filename);
+    },
+    [run],
+  );
+
   const cancel = useCallback(() => running.current?.abort(), []);
   const dismiss = useCallback(() => {
     setError(null);
     setAdded(null);
   }, []);
 
-  return { tools, working, error, added, choices, setChoices, add, rechart, tune, remove, cancel, dismiss };
+  return { working, error, added, choices, setChoices, add, rechart, tune, remove, save, cancel, dismiss };
 }
