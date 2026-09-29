@@ -1,6 +1,8 @@
-// v2: scores are points (with timing and chain bonuses) rather than tile counts, so older
-// records aren't comparable and are not carried over.
-const STATS_KEY = 'piano-tiles:songs:v2';
+// v3: every player's scores were reset (2026-09-29), so nothing recorded before is carried over.
+// (v2 was when scores became points, with timing and chain bonuses, rather than tile counts.)
+const STATS_KEY = 'piano-tiles:songs:v3';
+/** Records from before a reset: never read again, and cleared out of the way. */
+const OLD_KEYS = ['piano-tiles:songs:v2'];
 
 export interface SongStats {
   best: number;
@@ -29,6 +31,7 @@ function toCount(value: unknown): number {
 export function loadStats(): StatsMap {
   const stats: StatsMap = {};
   try {
+    for (const old of OLD_KEYS) localStorage.removeItem(old);
     const raw = localStorage.getItem(STATS_KEY);
     const parsed: unknown = raw ? JSON.parse(raw) : null;
     if (parsed && typeof parsed === 'object') {

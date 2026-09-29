@@ -135,6 +135,7 @@ export default function App() {
               onSave={importer.save}
               onPublish={importer.publish}
               onUnpublish={importer.unpublish}
+              onResetScores={cloud.resetScores}
               onRemove={removeSong}
               onPlay={start}
               onBack={stopTuning}

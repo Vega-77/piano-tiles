@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
+import { describeCloudError } from '../cloud/errors';
 import { MAX_NUDGE, type ChartFile } from '../songs/chart';
 import { DENSITIES, LENGTHS, LENGTH_SECONDS, type Density, type Length, type RechartOptions, type TuneOptions } from '../songs/importer';
 import { DIFFICULTY_LABELS } from '../songs/songs';
@@ -54,6 +55,8 @@ interface TuneScreenProps {
   onPublish: (id: string) => void;
   /** Takes the song down for everyone (it stays here as a draft). */
   onUnpublish: (id: string) => void;
+  /** Empties the song's leaderboard for everyone; resolves with how many entries it had, rejects if it can't be done. */
+  onResetScores: (id: string) => Promise<number>;
   onRemove: (id: string) => void;
   /** Plays the song, to hear whether the change helped. */
   onPlay: (id: string) => void;
@@ -80,7 +83,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
  * tiles, give it a tempo by hand, ask for more or fewer tiles, take it to another device, or take
  * it out. A screen of its own, so it is clear whether you are picking a song or tuning one.
  */
-export function TuneScreen({ song, busy, status, onTune, onRechart, onSave, onPublish, onUnpublish, onRemove, onPlay, onBack }: TuneScreenProps) {
+export function TuneScreen({ song, busy, status, onTune, onRechart, onSave, onPublish, onUnpublish, onResetScores, onRemove, onPlay, onBack }: TuneScreenProps) {
   const info = song.imported;
   const savedNudge = Math.round((info?.nudge ?? 0) * 1000);
   const savedLevel = info?.level ?? 'medium';
@@ -95,6 +98,9 @@ export function TuneScreen({ song, busy, status, onTune, onRechart, onSave, onPu
   const [confirming, setConfirming] = useState(false);
   const [takingDown, setTakingDown] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [confirmingReset, setConfirmingReset] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
 
   // What is saved changed (a save or a re-chart came back): start the fields from it again.
   const saved = `${song.title}|${song.bpm}|${savedNudge}|${savedLevel}|${savedLength}|${song.recording?.end ?? ''}`;
@@ -146,6 +152,22 @@ export function TuneScreen({ song, busy, status, onTune, onRechart, onSave, onPu
     setNotice(null);
     const chart = await onRechart(song.id, options);
     if (chart) setNotice(`Re-charted: ${chart.analysis?.tiles ?? 'new'} tiles.`);
+  };
+
+  const resetScores = async () => {
+    setConfirmingReset(false);
+    setNotice(null);
+    setProblem(null);
+    setResetting(true);
+    try {
+      const removed = await onResetScores(song.id);
+      setNotice(removed === 0 ? 'The leaderboard was already empty.' : `Leaderboard reset: ${removed} ${removed === 1 ? 'score' : 'scores'} removed.`);
+    } catch (failure) {
+      console.error('Resetting the leaderboard failed', failure);
+      setProblem(describeCloudError(failure) ?? 'The leaderboard could not be reset.');
+    } finally {
+      setResetting(false);
+    }
   };
 
   return (
@@ -345,6 +367,34 @@ export function TuneScreen({ song, busy, status, onTune, onRechart, onSave, onPu
           </div>
         </Section>
 
+        {publication !== 'draft' && (
+          <Section title="Leaderboard">
+            <p className="leading-snug text-white/55">
+              Everyone’s best run on this song. Resetting empties it for all players at once; they keep their nicknames and can put a new score on it straight away.
+            </p>
+            {confirmingReset ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-white/80">Remove every score from this song’s leaderboard? This can’t be undone.</span>
+                <button
+                  type="button"
+                  disabled={busy || resetting}
+                  onClick={() => void resetScores()}
+                  className="rounded-full bg-red-500/80 px-4 py-2 text-xs font-bold text-white hover:bg-red-500 disabled:opacity-40"
+                >
+                  Reset the scores
+                </button>
+                <button type="button" className={small} onClick={() => setConfirmingReset(false)}>
+                  Keep them
+                </button>
+              </div>
+            ) : (
+              <button type="button" className={small} disabled={busy || resetting} onClick={() => setConfirmingReset(true)}>
+                {resetting ? 'Resetting…' : 'Reset the scores…'}
+              </button>
+            )}
+          </Section>
+        )}
+
         <Section title="Song file">
           <p className="leading-snug text-white/55">
             {publication === 'draft'
@@ -390,6 +440,11 @@ export function TuneScreen({ song, busy, status, onTune, onRechart, onSave, onPu
       {notice && (
         <p role="status" className="rise-in mx-4 mb-2 rounded-2xl bg-emerald-500/15 px-4 py-2 text-center text-sm font-semibold text-emerald-100 ring-1 ring-emerald-400/40">
           {notice}
+        </p>
+      )}
+      {problem && (
+        <p role="alert" className="mx-4 mb-2 rounded-2xl bg-amber-400/10 px-4 py-2 text-center text-sm text-amber-200 ring-1 ring-amber-300/30">
+          {problem}
         </p>
       )}
       {status}

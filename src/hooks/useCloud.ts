@@ -189,9 +189,18 @@ export function useCloud({ backend = firebaseBackend }: CloudOptions = {}) {
     [loadBoard],
   );
 
+  /** Empties a song's leaderboard (the rules only let an admin), and resolves with how many entries it had. Rejects if it can't be done. */
+  const resetScores = useCallback(async (songId: string): Promise<number> => {
+    try {
+      return await (await latest.current.backend.scores()).clear(songId);
+    } finally {
+      boards.current.clear(); // (whatever was kept of the board is out of date, or is about to be)
+    }
+  }, []);
+
   const dismissError = useCallback(() => setError(null), []);
 
-  return { account, nickname, admin, checking, signingIn, error, claimName, signInWithGoogle, signOut, loadBoard, submit, dismissError };
+  return { account, nickname, admin, checking, signingIn, error, claimName, signInWithGoogle, signOut, loadBoard, submit, resetScores, dismissError };
 }
 
 export type Cloud = ReturnType<typeof useCloud>;

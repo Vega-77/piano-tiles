@@ -52,12 +52,16 @@ function fakeFirestore() {
     getCountFromServer: async (query: Query) => ({ data: () => ({ count: matching(query).length }) }),
     commit: vi.fn(async (): Promise<void> => undefined),
     writeBatch: () => {
-      const writes: Array<[string, Record<string, unknown>]> = [];
+      const writes: Array<[string, Record<string, unknown> | null]> = [];
       return {
         set: (ref: Ref, data: Record<string, unknown>) => void writes.push([ref.path, data]),
+        delete: (ref: Ref) => void writes.push([ref.path, null]),
         commit: async () => {
           await sdk.commit();
-          for (const [path, data] of writes) docs.set(path, { ...data });
+          for (const [path, data] of writes) {
+            if (data) docs.set(path, { ...data });
+            else docs.delete(path);
+          }
         },
       };
     },
@@ -133,6 +137,65 @@ describe('the leaderboards in Firestore', () => {
 
     expect(await scores.submit('a', { uid: 'u1', name: 'Ann', score: 301, laps: 3, chain: 12 })).toBe(true);
     expect(docs.get('songs/a/scores/u1')).toMatchObject({ score: 301, laps: 3, chain: 12 });
+  });
+
+  describe('resetting a leaderboard', () => {
+    it('removes every entry on that song, and nothing else', async () => {
+      const { docs, scores } = fakeFirestore();
+      docs.set('songs/a/scores/u1', entry('Ann', 300));
+      docs.set('songs/a/scores/u2', entry('Bob', 900));
+      docs.set('songs/b/scores/u1', entry('Ann', 5000));
+      docs.set('songs/a', { title: 'kept' });
+      docs.set('players/u1', { name: 'Ann', key: 'ann' });
+      docs.set('names/ann', { uid: 'u1' });
+
+      expect(await scores.clear('a')).toBe(2);
+
+      expect([...docs.keys()].sort()).toEqual(['names/ann', 'players/u1', 'songs/a', 'songs/b/scores/u1']);
+      expect(await scores.top('a', 10)).toEqual([]);
+    });
+
+    it('takes an entry nobody can read as well, so nothing is left', async () => {
+      const { docs, scores } = fakeFirestore();
+      docs.set('songs/a/scores/u1', entry('Ann', 300));
+      docs.set('songs/a/scores/u2', { name: 'Bob', score: 'lots' });
+      expect(await scores.clear('a')).toBe(2);
+      expect([...docs.keys()]).toEqual([]);
+    });
+
+    it('is content with a board that is empty already', async () => {
+      const { sdk, scores } = fakeFirestore();
+      expect(await scores.clear('a')).toBe(0);
+      expect(sdk.commit).not.toHaveBeenCalled();
+    });
+
+    it('goes in batches, since one write can only hold so many', async () => {
+      const { docs, sdk, scores } = fakeFirestore();
+      for (let i = 0; i < 850; i++) docs.set(`songs/a/scores/u${i}`, entry(`P${i}`, i + 1));
+
+      expect(await scores.clear('a')).toBe(850);
+
+      expect(sdk.commit).toHaveBeenCalledTimes(3); // 400 + 400 + 50
+      expect(docs.size).toBe(0);
+    });
+
+    it('lets a refusal (an account that is not an admin) through, to be put into words elsewhere', async () => {
+      const { docs, sdk, scores } = fakeFirestore();
+      docs.set('songs/a/scores/u1', entry('Ann', 300));
+      sdk.commit.mockRejectedValueOnce(Object.assign(new Error('denied'), { code: 'permission-denied' }));
+
+      await expect(scores.clear('a')).rejects.toMatchObject({ code: 'permission-denied' });
+      expect(docs.has('songs/a/scores/u1')).toBe(true);
+    });
+
+    it('lets a player put a new score on the board straight after', async () => {
+      const { docs, scores } = fakeFirestore();
+      docs.set('songs/a/scores/u1', entry('Ann', 9000));
+      await scores.clear('a');
+
+      expect(await scores.submit('a', { uid: 'u1', name: 'Ann', score: 120, laps: 0, chain: 3 })).toBe(true);
+      expect(docs.get('songs/a/scores/u1')).toMatchObject({ score: 120 });
+    });
   });
 });
 

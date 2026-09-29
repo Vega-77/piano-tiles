@@ -233,4 +233,52 @@ describe('the leaderboard', () => {
     backend.leaderboards.offline = false;
     expect((await settle(() => result.current.submit('a', { score: 100, laps: 1, chain: 1 }))).improved).toBe(true);
   });
+
+  describe('resetting it', () => {
+    const someone = { uid: 'x', name: 'Xan', score: 900, laps: 3, chain: 20 };
+
+    it('empties that song’s board only, and says how many entries there were', async () => {
+      const { backend, result } = await setup();
+      backend.leaderboards.boards.set('a', new Map([['x', someone], ['y', { ...someone, uid: 'y', name: 'Yas' }]]));
+      backend.leaderboards.boards.set('b', new Map([['x', someone]]));
+
+      expect(await settle(() => result.current.resetScores('a'))).toBe(2);
+
+      expect(backend.leaderboards.boards.has('a')).toBe(false);
+      expect(backend.leaderboards.boards.get('b')?.size).toBe(1);
+    });
+
+    it('shows the emptied board at once, not the one it kept from a moment ago', async () => {
+      const { backend, result } = await setup();
+      backend.leaderboards.boards.set('a', new Map([['x', someone]]));
+      expect((await settle(() => result.current.loadBoard('a'))).top).toHaveLength(1);
+
+      await settle(() => result.current.resetScores('a'));
+
+      expect((await settle(() => result.current.loadBoard('a'))).top).toEqual([]);
+    });
+
+    it('lets a player start again on it', async () => {
+      const { backend, result } = await setup();
+      await settle(() => result.current.claimName('Pat'));
+      await settle(() => result.current.submit('a', { score: 900, laps: 3, chain: 20 }));
+      await settle(() => result.current.resetScores('a'));
+
+      const sent = await settle(() => result.current.submit('a', { score: 50, laps: 0, chain: 2 }));
+
+      expect(sent.improved).toBe(true);
+      expect(sent.mine).toMatchObject({ rank: 1, score: { score: 50 } });
+      expect(backend.leaderboards.boards.get('a')?.size).toBe(1);
+    });
+
+    it('rejects when the cloud cannot be reached, leaving the board as it was', async () => {
+      const { backend, result } = await setup();
+      backend.leaderboards.boards.set('a', new Map([['x', someone]]));
+      backend.leaderboards.offline = true;
+
+      await expect(settle(() => result.current.resetScores('a'))).rejects.toMatchObject({ code: 'unavailable' });
+
+      expect(backend.leaderboards.boards.get('a')?.size).toBe(1);
+    });
+  });
 });

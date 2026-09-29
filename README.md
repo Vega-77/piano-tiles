@@ -125,6 +125,7 @@ Every published song has a leaderboard (the top ten, with your own place shown i
 - **Keeping a nickname.** A guest lives only in that browser, so clearing the browser's data loses it (and the name stays taken). **Keep it with Google** (or **Sign in with Google**, for someone who has played before) under the title turns the guest into a Google account with the same nickname and scores, which then follows the player to other devices. Only a Google account can sign out.
 - **What the rules keep out:** someone else's name, someone else's entry, a lowered score, extra fields, and absurd numbers (at most 100,000,000 points, 1,000 laps, a chain of 100,000). What they can't keep out is cheating: the game runs in the player's browser, so a determined player can send any score inside those limits. That is fine for friends; for a wide public it would need scores checked on a server, which is beyond the free plan.
 - **Not there:** replays and ghosts.
+- **Resetting the scores.** The owner, signed in with Google, opens a published song's tuning screen and taps **Reset the scores…** under *Leaderboard* to empty that song's board for everyone (nicknames stay, and players can put a new score on it at once). This is the one place a score is ever removed, and the rules let only an admin do it. A player's own bests are kept on their device, so a reset of those is a change of the key they are kept under (`piano-tiles:songs:v3`): the first time a device opens a version with a new key it starts from nothing, and the old record is cleared away. The last reset of both was on 2026-09-29.
 
 Boards are read a few at a time and looked at again only after three minutes or after the player's own run, to stay inside the free daily reads.
 
@@ -201,7 +202,7 @@ The 60fps loop lives outside React so per-frame movement never triggers a render
 | `src/game/input.ts`, `trace.ts` | `eventAge` says how long ago a touch or key really happened (taps are graded then); `trace` is the one-line-at-a-time feed of what the engine did with each tap that the `?input` readout listens to (nothing is built when it isn't open) |
 | `src/game/effects.ts` | Canvas visuals: animated backdrop, the timing bar, hit bursts, ripples, popups, banners |
 | `src/game/audio.ts` | Web Audio: plays a song's recording at each lap's speed. It also has a small synth (lead, drums, bass, chords) for a song that has notes instead of a recording, which the tests use |
-| `src/game/storage.ts` | Per-song best score, chain and laps |
+| `src/game/storage.ts` | Per-song best score, chain and laps (the key carries a version, moved on to reset everyone's) |
 | `src/songs/` | Note-notation parser and the arrangement builder (used by the synth path and the tests), and `songs.ts`, the numbers the screens show about a song |
 | `src/songs/analysis/` | The in-browser analyser for added songs: spectral onsets, tempo and beat grid, tile placement (`analyze.ts` and friends), where a long song stops (`length.ts`), run in a worker (`analyzer.worker.ts`, `client.ts`) |
 | `src/songs/` (added songs) | `decode.ts` reads a file's audio, `importer.ts` adds / re-charts / tunes / removes a song, `store.ts` keeps songs in IndexedDB, `bundle.ts` is the `.pianotiles` song file, `chart.ts` and `library.ts` turn stored charts into playable songs |

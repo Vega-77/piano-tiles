@@ -92,6 +92,13 @@ export function createMemoryScores(): MemoryScores {
       board.set(run.uid, { ...run });
       return true;
     },
+    async clear(songId) {
+      scores.calls.push(`clear ${songId}`);
+      if (scores.offline) throw lost();
+      const removed = scores.boards.get(songId)?.size ?? 0;
+      scores.boards.delete(songId);
+      return removed;
+    },
   };
   return scores;
 }

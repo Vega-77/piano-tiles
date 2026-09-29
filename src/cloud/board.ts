@@ -4,6 +4,9 @@ import { CloudError } from './errors';
 import { nameKey } from './names';
 import type { Players, Score, Scores } from './types';
 
+/** How many entries are removed in one write (a batch may hold 500). */
+const CLEAR_BATCH = 400;
+
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
 
 /** An entry from its document, or undefined for one this version can't make sense of. */
@@ -49,6 +52,17 @@ export function createFirestoreScores(sdk: FirestoreSdk, db: Firestore): Scores 
         sdk.setDoc(entry(songId, run.uid), { name: run.name, score: run.score, laps: run.laps, chain: run.chain, at: sdk.serverTimestamp() }),
       );
       return true;
+    },
+
+    async clear(songId) {
+      const snapshot = await sdk.getDocsFromServer(sdk.query(board(songId)));
+      const ids = snapshot.docs.map((document) => document.id);
+      for (let from = 0; from < ids.length; from += CLEAR_BATCH) {
+        const batch = sdk.writeBatch(db);
+        for (const id of ids.slice(from, from + CLEAR_BATCH)) batch.delete(entry(songId, id));
+        await withTimeout(batch.commit());
+      }
+      return ids.length;
     },
   };
 }

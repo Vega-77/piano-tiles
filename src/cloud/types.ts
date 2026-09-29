@@ -71,6 +71,8 @@ export interface Scores {
   standing(songId: string, uid: string): Promise<Standing | undefined>;
   /** Puts the run on the board if it beats the player's entry there; says whether it did. */
   submit(songId: string, run: Run): Promise<boolean>;
+  /** Empties a song's leaderboard and says how many entries it had. Only an admin's account is let to (firestore.rules). */
+  clear(songId: string): Promise<number>;
 }
 
 /** The names players play under, and who may publish songs. */

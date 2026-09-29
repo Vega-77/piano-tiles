@@ -39,8 +39,17 @@ describe('song stats', () => {
     expect(getBest('ode-to-joy')).toBe(0);
   });
 
+  it('starts everyone from nothing after the reset, and clears the old record out of the way', () => {
+    localStorage.setItem('piano-tiles:songs:v2', JSON.stringify({ a: { best: 9000, plays: 12, bestChain: 40, bestLaps: 3 } }));
+    expect(loadStats()).toEqual({});
+    expect(getBest('a')).toBe(0);
+    expect(localStorage.getItem('piano-tiles:songs:v2')).toBeNull();
+    expect(recordRun('a', run(300)).isNewBest).toBe(true);
+    expect(getBest('a')).toBe(300);
+  });
+
   it('survives corrupt storage', () => {
-    localStorage.setItem('piano-tiles:songs:v2', '{not json');
+    localStorage.setItem('piano-tiles:songs:v3', '{not json');
     expect(loadStats()).toEqual({});
   });
 });
