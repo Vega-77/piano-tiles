@@ -2,6 +2,3 @@ node_modules
 dist
 *.local
 *.tsbuildinfo
-tools/.venv
-tools/.cache
-__pycache__

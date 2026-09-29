@@ -89,22 +89,20 @@ Every song also gives one chord per bar (two joined with `/` to change halfway) 
 
 Drop in an mp4 (or mp3, m4a, wav, ogg, flac, mov, webm, anything with an audio track) and the tiles are laid out on its beat. The original recording plays instead of the built-in synth, and each lap it plays 1.3× faster along with the tiles (the pitch rises with it).
 
-Adding a song needs the game running on **your own computer**. The published site is static, so it can play the songs that are committed to the repo but has nowhere to send a new file.
+It all happens **in the browser, on the device you are holding**. There is nothing to install and no command to run, so it works the same on the published site, on a phone, or on a computer you have never used before:
 
-**One-time setup** (needs [Python 3.10+](https://www.python.org/downloads/); it installs librosa and a bundled ffmpeg into `tools/.venv`, nothing system-wide):
+1. Drop the file anywhere on the song list, or tap **Add a song** and choose it. The listening takes a few seconds for a typical song (a progress bar shows how far along it is, with a Cancel button).
+2. The new song appears in the list. Play it. If it doesn't feel right, open **Tune this song** on its card (below).
 
-```bash
-npm run setup:songs
-```
-
-**Then, each song:**
-
-1. `npm run dev`
-2. Drop the file anywhere on the song list (or click **Add a song**). The analysis takes a few seconds to a minute, depending on the length.
-3. The new song appears in the list. Play it. If it doesn't feel right, open **Tune this song** on its card (below).
-4. Commit `public/songs/` (`git add public/songs`). That folder holds the compressed audio and a small `chart.json` per song, so nobody has to analyse the file again, and the next deploy plays it.
+The file never leaves the device: it isn't uploaded anywhere, and it isn't added to this repository.
 
 **Options for the next song** (under the drop zone): a name (otherwise it comes from the file name), a tempo if you know it, and how many tiles (Easy, Normal, Busy).
+
+### Where songs are kept
+
+A song (its chart and its audio) is saved in that browser's own storage (IndexedDB), so it is still there next time, but **only on that device and in that browser**. To play it somewhere else, open **Tune this song → Save song file**, which downloads a `.pianotiles` file with the song, its audio and its tuning in one. On the other device, choose that file with **Add a song** (or drop it on the list). The song comes back exactly as it was, with no listening needed. Adding the same file again replaces that song; a different song with the same name gets a name of its own.
+
+Clearing a site's data removes its songs, and a private window forgets them when it closes (the game says so when the browser won't keep them). Save the song files of anything you would miss.
 
 ### How the tiles are placed
 
@@ -114,7 +112,7 @@ That works best on music with a steady beat: pop, rock, electronic, hip-hop. Mus
 
 ### Tune this song
 
-Every added song has a **Tune this song** panel, which saves straight into the song's files:
+Every added song has a **Tune this song** panel. Changes are saved on this device straight away.
 
 | Control | Use it when |
 | --- | --- |
@@ -122,14 +120,15 @@ Every added song has a **Tune this song** panel, which saves straight into the s
 | **Tempo** + **Re-chart** | The tiles drift away from the music, or the detected tempo is half or double the real one. Type the right BPM. **Detect the tempo again** goes back to automatic. |
 | **Easy / Normal / Busy** + **Re-chart** | There are too many or too few tiles. |
 | **Name** + **Save** | To rename it. |
-| **Remove song…** | To take it out (asks first). |
+| **Save song file** | To take the song to another device, or keep a backup. |
+| **Remove song…** | To take it out of this device (asks first). |
 
 ### Notes
 
-- Only add music you have the right to share. This repo is public and `public/songs/` is published with the site.
-- Up to 300 MB per file. Only one song is analysed at a time.
-- The tools only run under `npm run dev`, and only answer requests from the game page on your own machine. `npm run build` and `npm run preview` don't include them.
-- The deploy workflow doesn't need Python: it only publishes the committed songs. `npm run test:analyzer` runs the analyser's own checks on generated music (about a minute; it is not part of `npm test`).
+- Up to 300 MB per file and about ten minutes of music. Only one song is worked on at a time.
+- A small mp3, m4a, aac or wav is kept as it came. A video, or anything else the browser might not play back, is stored as just its sound (a WAV, so a long video takes more room than the mp4 did).
+- The browser has to be able to decode the file. mp3, m4a/mp4 and wav work everywhere; ogg, flac, webm and mov depend on the browser, and the game says so if it can't read one.
+- Only add music you have the right to use. Nothing is uploaded or published, but songs you add are yours to answer for.
 
 ## How it works
 
@@ -149,8 +148,9 @@ The 60fps loop lives outside React so per-frame movement never triggers a render
 | `src/game/effects.ts` | Canvas visuals: animated backdrop, the timing bar, hit bursts, ripples, popups, banners |
 | `src/game/audio.ts` | Web Audio synth: piano-ish lead, kick, snare, hats, bass, chord stabs and pad |
 | `src/game/storage.ts` | Per-song best score, chain and laps |
-| `src/songs/` | Song library, note-notation parser, the arrangement builder that turns melody + chords + groove into a full track, and the loader for songs added from recordings (`chart.ts`, `library.ts`, `importer.ts`) |
-| `tools/` | Adding songs, dev only: the Python analyser (`analyze.py`), and the Vite plugin that connects the page to it (`songs-plugin.ts`, `songs-bridge.ts`, `songs-files.ts`) |
+| `src/songs/` | Song library, note-notation parser, and the arrangement builder that turns melody + chords + groove into a full track |
+| `src/songs/analysis/` | The in-browser analyser for added songs: spectral onsets, tempo and beat grid, tile placement (`analyze.ts` and friends), run in a worker (`analyzer.worker.ts`, `client.ts`) |
+| `src/songs/` (added songs) | `decode.ts` reads a file's audio, `importer.ts` adds / re-charts / tunes / removes a song, `store.ts` keeps songs in IndexedDB, `bundle.ts` is the `.pianotiles` song file, `chart.ts` and `library.ts` turn stored charts into playable songs |
 | `src/hooks/useGame.ts` | Bridges the engine to React; state updates only on start, each score, each lap, pause and game over |
 | `src/index.css` | Tile looks and animations, switched by `data-kind` / `data-state` attributes |
 | `src/config.ts` | Tunables: timing windows, points, chain steps, lap speed factor |

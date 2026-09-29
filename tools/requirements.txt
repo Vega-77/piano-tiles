@@ -1,5 +1,0 @@
-librosa>=0.11
-numpy>=2.0
-scipy>=1.11
-soundfile>=0.13
-imageio-ffmpeg>=0.6
