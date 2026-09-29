@@ -11,6 +11,14 @@ const PARTIALS: ReadonlyArray<readonly [multiple: number, gain: number]> = [
 /** Worst-case output latency we'll compensate for, in seconds. */
 const MAX_LATENCY = 0.25;
 
+/** How long the previous lap's recording takes to fade out as the next one starts, in seconds. */
+const LAP_FADE = 0.04;
+
+interface RecordingVoice {
+  source: AudioBufferSourceNode;
+  gain: GainNode;
+}
+
 /**
  * What the engine needs from the audio layer, so tests can swap in a fake. The whole song, from
  * melody to drums, is scheduled ahead of time on the audio clock and plays on its own: it never
@@ -29,6 +37,17 @@ export interface Sound {
   stopSong(): void;
   /** Play part of the track at song time `at`. `secondsPerRow` turns row lengths into seconds. */
   schedule(event: MusicEvent, at: number, secondsPerRow: number): void;
+  /**
+   * Fetch and decode a recorded song so `playRecording` can start it on time. Call it after
+   * `unlock`. Rejects if the file can't be fetched or decoded.
+   */
+  load(url: string): Promise<void>;
+  /**
+   * Start a loaded recording from its beginning at song time `at`, at `rate` times normal speed
+   * (which raises its pitch with it). It replaces whatever recording was playing: the old one
+   * fades out as the new one starts, so each lap of a song can be scheduled on its own.
+   */
+  playRecording(url: string, at: number, rate: number): void;
   suspend(): void;
   resume(): void;
   playError(): void;
@@ -41,6 +60,10 @@ export class AudioEngine implements Sound {
   private songBus: GainNode | null = null;
   private noise: AudioBuffer | null = null;
   private fallbackOrigin = 0;
+  /** Decoded recordings by URL, kept so replaying a song doesn't fetch it again. */
+  private readonly recordings = new Map<string, Promise<AudioBuffer>>();
+  private readonly decoded = new Map<string, AudioBuffer>();
+  private voices: RecordingVoice[] = [];
 
   /** Create/resume the AudioContext. Must be called from a user gesture (autoplay policy). */
   unlock(): void {
@@ -83,8 +106,62 @@ export class AudioEngine implements Sound {
     songBus.gain.setValueAtTime(songBus.gain.value, t);
     songBus.gain.linearRampToValueAtTime(0, t + 0.15);
     const old = songBus;
+    for (const voice of this.voices) voice.source.stop(t + 0.2);
+    this.voices = [];
     window.setTimeout(() => old.disconnect(), 400);
     this.songBus = null;
+  }
+
+  async load(url: string): Promise<void> {
+    const ctx = this.ctx;
+    if (!ctx) return; // No Web Audio: the game runs silently, as it does for the synth.
+    let pending = this.recordings.get(url);
+    if (!pending) {
+      pending = fetch(url)
+        .then((response) => {
+          if (!response.ok) throw new Error(`Couldn't load the song's audio (${response.status})`);
+          return response.arrayBuffer();
+        })
+        .then((data) => ctx.decodeAudioData(data));
+      this.recordings.set(url, pending);
+      // Don't cache a failure: a retry should try again.
+      pending.catch(() => this.recordings.delete(url));
+    }
+    this.decoded.set(url, await pending);
+  }
+
+  playRecording(url: string, at: number, rate: number): void {
+    const { ctx, songBus } = this;
+    const buffer = this.decoded.get(url);
+    if (!ctx || !songBus || !buffer) return;
+
+    let when = at + this.latency();
+    // Started late (a slow frame): skip the part that should already have played.
+    let from = 0;
+    if (when < ctx.currentTime) {
+      from = (ctx.currentTime - when) * rate;
+      when = ctx.currentTime;
+      if (from >= buffer.duration) return;
+    }
+
+    // The lap that was playing gives way to this one. (It cleans itself up once it has ended.)
+    for (const old of this.voices) {
+      old.gain.gain.setValueAtTime(1, when);
+      old.gain.gain.linearRampToValueAtTime(0, when + LAP_FADE);
+      old.source.stop(when + LAP_FADE);
+    }
+
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.playbackRate.value = rate;
+    const gain = ctx.createGain();
+    source.connect(gain).connect(songBus);
+    source.onended = () => {
+      source.disconnect();
+      gain.disconnect();
+    };
+    this.voices = [{ source, gain }];
+    source.start(when, from);
   }
 
   schedule(event: MusicEvent, at: number, secondsPerRow: number): void {

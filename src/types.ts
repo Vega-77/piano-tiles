@@ -102,6 +102,33 @@ export interface Groove {
 
 export type Difficulty = 1 | 2 | 3 | 4 | 5;
 
+/**
+ * A real recording that plays under the tiles instead of the synthesised backing track. The
+ * song's rows are the recording's beat grid: row 0 falls `offset` seconds into the audio, and
+ * every row lasts 60 / (bpm × rowsPerBeat) seconds.
+ */
+export interface Recording {
+  /** Where to fetch the audio from. */
+  url: string;
+  /** Seconds into the audio at which row 0 falls. About one row long or less, and negative if the audio should start late. */
+  offset: number;
+  /** Length of the audio in seconds. */
+  duration: number;
+}
+
+/** What a song made from a recording remembers about how it was charted, for the tuning panel. */
+export interface ImportInfo {
+  /** The hand-set sync correction, in seconds (positive if the tiles land early against the music). */
+  nudge: number;
+  /** Whether the tempo was typed in rather than detected. */
+  manualBpm: boolean;
+  /** How busy the chart was asked to be. */
+  level: 'easy' | 'normal' | 'hard';
+  /** 0–1: how well the detected beats fit the grid, when the analyser said. */
+  confidence?: number;
+  warnings: readonly string[];
+}
+
 export interface Song {
   id: string;
   title: string;
@@ -119,6 +146,10 @@ export interface Song {
   hue2: number;
   /** The tapping part: rows of melody, with gaps. */
   beats: readonly BeatSpec[];
-  /** The whole song, row by row: melody plus drums, bass and chords. */
+  /** The whole song, row by row: melody plus drums, bass and chords. Empty for recorded songs. */
   track: readonly (readonly MusicEvent[])[];
+  /** Set on imported songs: the audio that plays instead of `track`. */
+  recording?: Recording;
+  /** Set on imported songs, along with `recording`. */
+  imported?: ImportInfo;
 }

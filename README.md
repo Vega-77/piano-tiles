@@ -85,6 +85,52 @@ G4~3      a hold tile, 3 rows tall (2–4 allowed)
 
 Every song also gives one chord per bar (two joined with `/` to change halfway) and a **groove**: a drum, bass and chord pattern with one character per row of the bar, for example `kick: 'x...x...'`, `bass: '1...5...'` (`1` root, `5` fifth, `8` octave). To add a song, append an entry with a title, composer, `difficulty` (1–5), `bpm`, `rowsPerBeat`, `rowsPerBar`, two theme hues, `notes`, `chords` and a `groove`. The loader refuses a bar that doesn't add up, and the tests check that every song is well formed, has gaps, plays as a full band, and starts at a proper pace.
 
+## Adding songs
+
+Drop in an mp4 (or mp3, m4a, wav, ogg, flac, mov, webm, anything with an audio track) and the tiles are laid out on its beat. The original recording plays instead of the built-in synth, and each lap it plays 1.3× faster along with the tiles (the pitch rises with it).
+
+Adding a song needs the game running on **your own computer**. The published site is static, so it can play the songs that are committed to the repo but has nowhere to send a new file.
+
+**One-time setup** (needs [Python 3.10+](https://www.python.org/downloads/); it installs librosa and a bundled ffmpeg into `tools/.venv`, nothing system-wide):
+
+```bash
+npm run setup:songs
+```
+
+**Then, each song:**
+
+1. `npm run dev`
+2. Drop the file anywhere on the song list (or click **Add a song**). The analysis takes a few seconds to a minute, depending on the length.
+3. The new song appears in the list. Play it. If it doesn't feel right, open **Tune this song** on its card (below).
+4. Commit `public/songs/` (`git add public/songs`). That folder holds the compressed audio and a small `chart.json` per song, so nobody has to analyse the file again, and the next deploy plays it.
+
+**Options for the next song** (under the drop zone): a name (otherwise it comes from the file name), a tempo if you know it, and how many tiles (Easy, Normal, Busy).
+
+### How the tiles are placed
+
+The analyser finds the tempo and where the first beat falls, then puts the tiles on a fixed grid from there. It looks for sudden jumps in the sound (it doesn't tell instruments apart) and puts a tile on the strongest hits that fall on the grid, keeping a gap between tiles and leaving rests where the music is quiet. A hit followed by sustained sound with nothing struck over it becomes a hold, and the hardest hits, where the low, middle and high of the sound all land together, can become doubles. It does not transcribe the melody, so the tiles follow the *rhythm* rather than the notes.
+
+That works best on music with a steady beat: pop, rock, electronic, hip-hop. Music that speeds up and slows down (live playing, classical rubato) can't sit on a fixed grid, and the analyser says so with a warning on the song.
+
+### Tune this song
+
+Every added song has a **Tune this song** panel, which saves straight into the song's files:
+
+| Control | Use it when |
+| --- | --- |
+| **Sync** slider (±250 ms) | The tiles reach the bar a little before or after the beat you hear. Bluetooth speakers and headphones add delay of their own, so this is often the first thing to try. |
+| **Tempo** + **Re-chart** | The tiles drift away from the music, or the detected tempo is half or double the real one. Type the right BPM. **Detect the tempo again** goes back to automatic. |
+| **Easy / Normal / Busy** + **Re-chart** | There are too many or too few tiles. |
+| **Name** + **Save** | To rename it. |
+| **Remove song…** | To take it out (asks first). |
+
+### Notes
+
+- Only add music you have the right to share. This repo is public and `public/songs/` is published with the site.
+- Up to 300 MB per file. Only one song is analysed at a time.
+- The tools only run under `npm run dev`, and only answer requests from the game page on your own machine. `npm run build` and `npm run preview` don't include them.
+- The deploy workflow doesn't need Python: it only publishes the committed songs. `npm run test:analyzer` runs the analyser's own checks on generated music (about a minute; it is not part of `npm test`).
+
 ## How it works
 
 The 60fps loop lives outside React so per-frame movement never triggers a render, and **one clock rules everything: the audio clock.**
@@ -103,7 +149,8 @@ The 60fps loop lives outside React so per-frame movement never triggers a render
 | `src/game/effects.ts` | Canvas visuals: animated backdrop, the timing bar, hit bursts, ripples, popups, banners |
 | `src/game/audio.ts` | Web Audio synth: piano-ish lead, kick, snare, hats, bass, chord stabs and pad |
 | `src/game/storage.ts` | Per-song best score, chain and laps |
-| `src/songs/` | Song library, note-notation parser, and the arrangement builder that turns melody + chords + groove into a full track |
+| `src/songs/` | Song library, note-notation parser, the arrangement builder that turns melody + chords + groove into a full track, and the loader for songs added from recordings (`chart.ts`, `library.ts`, `importer.ts`) |
+| `tools/` | Adding songs, dev only: the Python analyser (`analyze.py`), and the Vite plugin that connects the page to it (`songs-plugin.ts`, `songs-bridge.ts`, `songs-files.ts`) |
 | `src/hooks/useGame.ts` | Bridges the engine to React; state updates only on start, each score, each lap, pause and game over |
 | `src/index.css` | Tile looks and animations, switched by `data-kind` / `data-state` attributes |
 | `src/config.ts` | Tunables: timing windows, points, chain steps, lap speed factor |

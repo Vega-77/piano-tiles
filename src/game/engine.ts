@@ -61,6 +61,14 @@ const JUDGMENT_LABEL: Record<Judgment, string> = { perfect: 'PERFECT', good: 'GO
 /** Upper bound on rows of music handed to the audio clock in a single frame. */
 const MAX_ROWS_PER_FRAME = 256;
 
+/**
+ * A recorded song is handed over a whole lap at a time, this far ahead (seconds). It only has to
+ * outrun a slow frame, since the audio clock does the timing.
+ */
+const RECORDING_LOOKAHEAD = 1;
+/** Laps of a recording that will ever be scheduled: by lap 30 it is thousands of times too fast to play. */
+const MAX_RECORDED_LAPS = 30;
+
 // A count-in of soft ticks over the lead-in, so the music starts before the first tile arrives.
 const COUNT_IN_FIRST: readonly MusicEvent[] = [{ kind: 'kick' }, { kind: 'hat' }];
 const COUNT_IN: readonly MusicEvent[] = [{ kind: 'hat', soft: true }];
@@ -131,6 +139,8 @@ export class GameEngine {
   private spawnedEnd = 0;
   /** Next row to schedule music for, counting across laps. Negative rows are the count-in. */
   private rowCursor = -LEAD_ROWS;
+  /** Next lap of a recorded song to hand to the audio clock. */
+  private recordedLap = 0;
   /** Rows scrolled at the last sync. */
   private scroll = 0;
   private lap = 0;
@@ -177,6 +187,7 @@ export class GameEngine {
     this.spawnCursor = 0;
     this.spawnedEnd = 0;
     this.rowCursor = -LEAD_ROWS;
+    this.recordedLap = 0;
     this.lap = 0;
     this.combo = 0;
     this.stats = { perfect: 0, good: 0, ok: 0, maxChain: 0, tiles: 0, laps: 0 };
@@ -321,6 +332,7 @@ export class GameEngine {
   private update(now: number): void {
     this.checkLap(now);
     this.scheduleMusic(now);
+    this.scheduleRecording(now);
     this.sync(now);
 
     for (const tile of this.tiles) {
@@ -382,6 +394,8 @@ export class GameEngine {
     for (let rows = 0; rows < MAX_ROWS_PER_FRAME; rows++) {
       const row = this.rowCursor;
       const counting = row < 0;
+      // A recorded song brings its own band: only the count-in is synthesised.
+      if (!counting && song.recording) return;
       const lap = counting ? 0 : Math.floor(row / this.rowsPerLap);
       const inLap = counting ? row : row % this.rowsPerLap;
       const at = timeline.arrival(lap, inLap);
@@ -391,6 +405,26 @@ export class GameEngine {
       const secondsPerRow = 1 / timeline.rate(lap);
       for (const event of events) this.audio.schedule(event, at, secondsPerRow);
       this.rowCursor++;
+    }
+  }
+
+  /**
+   * Hand a recorded song to the audio clock, one lap at a time. Lap `n` plays the whole recording
+   * `LAP_SPEED_FACTOR ** n` times faster, starting early enough that the recording's beat grid
+   * (row 0 is `offset` seconds in) lands exactly where the timeline puts row 0 of that lap.
+   */
+  private scheduleRecording(now: number): void {
+    const { song, timeline } = this;
+    const recording = song?.recording;
+    if (!recording || !timeline) return;
+    // Laps shrink geometrically, so cap how many are handed over in one frame.
+    for (let laps = 0; laps < 2 && this.recordedLap < MAX_RECORDED_LAPS; laps++) {
+      const lap = this.recordedLap;
+      const speed = timeline.speedFactor(lap);
+      const at = timeline.lapStart(lap) - recording.offset / speed;
+      if (at > now + RECORDING_LOOKAHEAD) return;
+      this.audio.playRecording(recording.url, at, speed);
+      this.recordedLap++;
     }
   }
 

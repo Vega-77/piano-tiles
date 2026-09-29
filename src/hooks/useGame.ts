@@ -4,28 +4,39 @@ import { AudioEngine } from '../game/audio';
 import { Effects } from '../game/effects';
 import { createInitialState, GameEngine, type GameOverResult } from '../game/engine';
 import { loadStats, type StatsMap } from '../game/storage';
-import { getSong, SONGS } from '../songs/songs';
 import type { GameState, Song } from '../types';
 
 const LANE_KEYS: Record<string, number> = { KeyD: 0, KeyF: 1, KeyJ: 2, KeyK: 3 };
 
 /** Bridges the imperative engine and effects to React: state updates only on discrete game events. */
-export function useGame() {
+export function useGame(songs: readonly Song[]) {
   const bgRef = useRef<HTMLCanvasElement>(null);
   const fxRef = useRef<HTMLCanvasElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const boardRef = useRef<HTMLDivElement>(null);
   const layerRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<GameEngine | null>(null);
+  const audioRef = useRef<AudioEngine | null>(null);
   const effectsRef = useRef<Effects | null>(null);
+  const songsRef = useRef(songs);
+  /** The song being fetched before it can start (a recording has to be downloaded and decoded first). */
+  const loadingRef = useRef<string | null>(null);
 
   const [state, setState] = useState<GameState>(createInitialState);
   const [lastRun, setLastRun] = useState<GameOverResult | null>(null);
   const [stats, setStats] = useState<StatsMap>(loadStats);
-  const [selectedId, setSelectedId] = useState(SONGS[0].id);
+  const [selectedId, setSelectedId] = useState(songs[0].id);
+  const [loadingId, setLoadingId] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    songsRef.current = songs;
+  }, [songs]);
 
   // What the theme colours follow: the song being played, or the one highlighted in the menu.
-  const activeSong: Song = getSong(state.status === 'menu' ? selectedId : state.songId) ?? SONGS[0];
+  // (A song that was just removed can still be selected for a moment: the first song stands in.)
+  const wanted = state.status === 'menu' ? selectedId : state.songId;
+  const activeSong: Song = songs.find((song) => song.id === wanted) ?? songs[0];
 
   useEffect(() => {
     const bg = bgRef.current;
@@ -35,9 +46,10 @@ export function useGame() {
 
     const effects = new Effects(bg, fx, stageRef.current);
     effects.start();
+    const audio = new AudioEngine();
     const engine = new GameEngine({
       layer,
-      audio: new AudioEngine(),
+      audio,
       effects,
       onStateChange: setState,
       onGameOver: (result) => {
@@ -46,6 +58,7 @@ export function useGame() {
       },
     });
     engineRef.current = engine;
+    audioRef.current = audio;
     effectsRef.current = effects;
 
     const onKeyDown = (e: KeyboardEvent) => {
@@ -80,6 +93,7 @@ export function useGame() {
       engine.destroy();
       effects.destroy();
       engineRef.current = null;
+      audioRef.current = null;
       effectsRef.current = null;
     };
   }, []);
@@ -88,12 +102,34 @@ export function useGame() {
     effectsRef.current?.setTheme(activeSong.hue, activeSong.hue2);
   }, [activeSong]);
 
-  const start = useCallback((songId: string) => {
-    const song = getSong(songId);
-    if (!song) return;
+  const start = useCallback(async (songId: string) => {
+    const song = songsRef.current.find((candidate) => candidate.id === songId);
+    const engine = engineRef.current;
+    const audio = audioRef.current;
+    if (!song || !engine || !audio || loadingRef.current) return;
     setSelectedId(songId);
     setLastRun(null);
-    engineRef.current?.start(song);
+    setLoadError(null);
+
+    if (song.recording) {
+      // A recording has to be downloaded and decoded before it can start on time. The audio
+      // context is unlocked first, while the click that asked to play is still going on: browsers
+      // only allow that in a gesture, and the wait for the download would be too late.
+      audio.unlock();
+      loadingRef.current = songId;
+      setLoadingId(songId);
+      try {
+        await audio.load(song.recording.url);
+      } catch (error) {
+        setLoadError(error instanceof Error ? error.message : "Couldn't load the song's audio.");
+        return;
+      } finally {
+        loadingRef.current = null;
+        setLoadingId(null);
+      }
+      if (!engineRef.current) return; // (the page was closed while it loaded)
+    }
+    engine.start(song);
   }, []);
 
   const quit = useCallback(() => {
@@ -129,6 +165,8 @@ export function useGame() {
     selectedId,
     setSelectedId,
     activeSong,
+    loadingId,
+    loadError,
     refs: { bgRef, fxRef, stageRef, boardRef, layerRef },
     start,
     quit,

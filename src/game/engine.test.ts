@@ -13,7 +13,7 @@ import {
   TILE_HEIGHT,
 } from '../config';
 import { buildTrack, type Arrangement } from '../songs/arrangement';
-import type { BeatSpec, GameState, MusicEvent, Song, Tile } from '../types';
+import type { BeatSpec, GameState, MusicEvent, Recording, Song, Tile } from '../types';
 import type { Sound } from './audio';
 import { noopFx } from './effects';
 import { comboMultiplier, GameEngine, judge, type GameOverResult } from './engine';
@@ -66,20 +66,22 @@ const rest = (rows = 1): BeatSpec => ({ type: 'rest', rows });
 /** A realistic-length song. (A one-beat song would have a one-row lap, and laps shrink geometrically.) */
 const manyTaps = (count: number): BeatSpec[] => Array.from({ length: count }, () => tap());
 
-function makeSong(beats: BeatSpec[], speed: number, arrangement?: Arrangement): Song {
+function makeSong(beats: BeatSpec[], speed: number, arrangement?: Arrangement, recording?: Recording): Song {
   return {
     id: 'test', title: 'Test', composer: 'Tester', description: '', difficulty: 1,
     bpm: 100, rowsPerBeat: 2, rowsPerBar: arrangement?.rowsPerBar ?? 8, speed, hue: 200, hue2: 250,
-    beats, track: buildTrack(beats, arrangement),
+    beats, track: recording ? [] : buildTrack(beats, arrangement), recording,
   };
 }
 
 interface Scheduled { event: MusicEvent; at: number; secondsPerRow: number }
+interface Played { url: string; at: number; rate: number }
 
-interface SetupOptions { speed?: number; arrangement?: Arrangement }
+interface SetupOptions { speed?: number; arrangement?: Arrangement; recording?: Recording }
 
-function setup(beats: BeatSpec[], { speed = SPEED, arrangement }: SetupOptions = {}) {
+function setup(beats: BeatSpec[], { speed = SPEED, arrangement, recording }: SetupOptions = {}) {
   const scheduled: Scheduled[] = [];
+  const played: Played[] = [];
   const calls = { started: 0, stopped: 0, suspended: 0, resumed: 0, levelUps: 0, errors: 0 };
   const states: GameState[] = [];
   const results: GameOverResult[] = [];
@@ -89,6 +91,8 @@ function setup(beats: BeatSpec[], { speed = SPEED, arrangement }: SetupOptions =
     startSong: () => { calls.started++; },
     stopSong: () => { calls.stopped++; },
     schedule: (event, at, secondsPerRow) => { scheduled.push({ event, at, secondsPerRow }); },
+    load: async () => {},
+    playRecording: (url, at, rate) => { played.push({ url, at, rate }); },
     suspend: () => { calls.suspended++; },
     resume: () => { calls.resumed++; },
     playError: () => { calls.errors++; },
@@ -102,10 +106,10 @@ function setup(beats: BeatSpec[], { speed = SPEED, arrangement }: SetupOptions =
     onGameOver: (result) => results.push(result),
   });
   songTime = START;
-  const song = makeSong(beats, speed, arrangement);
+  const song = makeSong(beats, speed, arrangement, recording);
   engine.start(song);
   const rate = speed / TILE_HEIGHT; // rows per second on lap 0
-  return { engine, song, scheduled, calls, states, results, rate, t0: START + LEAD_ROWS / rate };
+  return { engine, song, scheduled, played, calls, states, results, rate, t0: START + LEAD_ROWS / rate };
 }
 
 function must<T>(value: T | undefined | null): T {
@@ -336,6 +340,63 @@ describe('the music', () => {
     expect(engine.getState().status).toBe('gameover');
     expect(calls.stopped).toBeGreaterThanOrEqual(1);
     expect(calls.errors).toBe(1);
+  });
+});
+
+describe('a recorded song', () => {
+  // Row 0 is 0.13s into the recording; a row is 0.5s at this speed (2 rows per second).
+  const recording: Recording = { url: 'songs/demo/audio.mp3', offset: 0.13, duration: 4.2 };
+  const eight = () => manyTaps(8);
+
+  it('starts its audio early enough that row 0 of the recording lands on the first tile', () => {
+    const { engine, played, t0 } = setup(eight(), { recording });
+    goTo(t0 - 1);
+    expect(played).toEqual([{ url: recording.url, at: t0 - 0.13, rate: 1 }]);
+    expect(engine.getState().status).toBe('playing');
+  });
+
+  it('waits until the recording is due before handing it over', () => {
+    const { played, t0 } = setup(eight(), { recording });
+    goTo(t0 - 1.5); // 1.37s before the audio has to start: not yet
+    expect(played).toHaveLength(0);
+    goTo(t0 - 1.1);
+    expect(played).toHaveLength(1);
+    goTo(t0 - 1);
+    expect(played).toHaveLength(1); // once only
+  });
+
+  it('plays no synthesised music, apart from the count-in', () => {
+    const { scheduled, t0, engine } = setup(eight(), { recording });
+    goTo(t0 + 3.4);
+    expect(scheduled.filter((s) => s.at >= t0 - 1e-9)).toEqual([]);
+    expect(scheduled.map((s) => s.event.kind).sort()).toEqual(['hat', 'hat', 'hat', 'hat', 'kick']);
+    expect(engine.getState().status).toBe('gameover'); // (nobody was tapping)
+  });
+
+  it('plays the recording again, faster, on every lap, still on the beat', () => {
+    const { engine, played, rate } = setup(eight(), { recording });
+    const due = new Map<number, number>(); // beat -> when its tile is due (tiles are removed once cleared)
+    playPerfectly(engine, () => {
+      for (const tile of engine.getTiles()) due.set(tile.beat, tile.time);
+      return engine.getState().lap >= 2;
+    });
+    goTo(songTime + 0.2);
+    expect(played.map((p) => p.rate)).toEqual([1, LAP_SPEED_FACTOR, LAP_SPEED_FACTOR ** 2]);
+
+    // Every lap, row `k` of the recording (offset + k rows in) arrives exactly when its tile is due.
+    const rowSeconds = 1 / rate;
+    for (const lap of [0, 1]) {
+      const { at, rate: speed } = played[lap];
+      expect(at + (recording.offset + 3 * rowSeconds) / speed).toBeCloseTo(must(due.get(lap * 8 + 3)), 9);
+    }
+  });
+
+  it('never hands over more than a couple of laps in one frame', () => {
+    const { played, engine, calls, t0 } = setup(eight(), { recording });
+    goTo(t0 + 1000); // a huge jump, as after a long freeze
+    expect(played.length).toBeLessThanOrEqual(2);
+    expect(engine.getState().status).toBe('gameover');
+    expect(calls.stopped).toBeGreaterThanOrEqual(1);
   });
 });
 

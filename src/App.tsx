@@ -1,16 +1,70 @@
-import type { CSSProperties } from 'react';
+import { useCallback, useEffect, type CSSProperties } from 'react';
 import { Board } from './components/Board';
 import { GameOverOverlay } from './components/GameOverOverlay';
 import { Hud } from './components/Hud';
+import { ImportPanel } from './components/ImportPanel';
+import { JobStatus } from './components/JobStatus';
 import { PauseOverlay } from './components/PauseOverlay';
 import { SongSelect } from './components/SongSelect';
+import { TunePanel } from './components/TunePanel';
 import { useGame } from './hooks/useGame';
-import { SONGS } from './songs/songs';
+import { useImporter } from './hooks/useImporter';
+import { useLibrary } from './hooks/useLibrary';
+import { CAN_IMPORT } from './songs/importer';
+import type { Song } from './types';
+
+/** A file dropped anywhere the menu isn't would otherwise replace the game with the file. */
+function useKeepFileDropsOut() {
+  useEffect(() => {
+    const hasFiles = (event: DragEvent) => Array.from(event.dataTransfer?.types ?? []).includes('Files');
+    const refuse = (event: DragEvent) => {
+      if (hasFiles(event)) event.preventDefault();
+    };
+    window.addEventListener('dragover', refuse);
+    window.addEventListener('drop', refuse);
+    return () => {
+      window.removeEventListener('dragover', refuse);
+      window.removeEventListener('drop', refuse);
+    };
+  }, []);
+}
 
 export default function App() {
-  const game = useGame();
+  const library = useLibrary();
+  const game = useGame(library.songs);
+  const importer = useImporter(library.refresh);
   const { state, lastRun, stats, selectedId, setSelectedId, activeSong, refs, start, quit, pause, resume } = game;
   const theme = { '--hue': activeSong.hue, '--hue2': activeSong.hue2 } as CSSProperties;
+  useKeepFileDropsOut();
+
+  const { add, remove, working } = importer;
+  const addSong = useCallback(
+    async (file: File) => {
+      if (working) return;
+      const chart = await add(file);
+      if (chart) setSelectedId(chart.id);
+    },
+    [add, working, setSelectedId],
+  );
+  const removeSong = useCallback(
+    async (id: string) => {
+      if (await remove(id)) setSelectedId(library.songs[0].id);
+    },
+    [remove, library.songs, setSelectedId],
+  );
+
+  const canTune = CAN_IMPORT && importer.tools?.available === true;
+  const tuner = (song: Song) =>
+    canTune && song.imported ? (
+      <TunePanel
+        key={song.id}
+        song={song}
+        busy={working !== null}
+        onTune={importer.tune}
+        onRechart={importer.rechart}
+        onRemove={removeSong}
+      />
+    ) : null;
 
   return (
     <div className="relative h-dvh w-full overflow-hidden bg-zinc-950">
@@ -47,11 +101,34 @@ export default function App() {
 
           {state.status === 'menu' && (
             <SongSelect
-              songs={SONGS}
+              songs={library.songs}
               stats={stats}
               selectedId={selectedId}
               onSelect={setSelectedId}
               onPlay={start}
+              loadingId={game.loadingId}
+              loadError={game.loadError}
+              problems={library.problems}
+              onDropFile={CAN_IMPORT ? addSong : undefined}
+              adder={
+                <ImportPanel
+                  tools={importer.tools}
+                  busy={working !== null}
+                  choices={importer.choices}
+                  onChoices={importer.setChoices}
+                  onFile={addSong}
+                />
+              }
+              status={
+                <JobStatus
+                  working={working}
+                  error={importer.error}
+                  added={importer.added}
+                  onCancel={importer.cancel}
+                  onDismiss={importer.dismiss}
+                />
+              }
+              tuner={tuner}
             />
           )}
 
