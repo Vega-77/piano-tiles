@@ -38,6 +38,14 @@ const REASONS: Record<FailReason, string> = {
   wrong: 'You tapped a lane with no tile in it',
 };
 
+/** What ended the run, with how far off the tap was when it was one that missed. */
+export function reasonText(result: Pick<GameOverResult, 'reason' | 'by'>): string {
+  if (result.by === undefined) return REASONS[result.reason];
+  return result.reason === 'early'
+    ? `You tapped too early: the tile was still ${result.by} ms from the bar`
+    : `You tapped ${result.by} ms too late`;
+}
+
 interface GameOverOverlayProps {
   song: Song;
   score: number;
@@ -80,7 +88,7 @@ export function GameOverOverlay({ song, score, best, result, standing, onRestart
             {song.title}
           </p>
           <p className="text-xs text-white/45">{DIFFICULTY_LABELS[song.difficulty]}</p>
-          {result && <p className="mx-auto mt-2 max-w-[17rem] text-xs text-rose-300/90">{REASONS[result.reason]}</p>}
+          {result && <p className="mx-auto mt-2 max-w-[17rem] text-xs text-rose-300/90">{reasonText(result)}</p>}
         </div>
 
         <p className="title-gradient text-7xl font-black tabular-nums leading-none">{shownScore.toLocaleString()}</p>

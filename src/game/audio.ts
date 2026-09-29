@@ -1,4 +1,5 @@
 import type { MusicEvent } from '../types';
+import { trace, tracing } from './trace';
 
 // Relative strength of each harmonic of the lead; a few decaying partials read as "piano-ish".
 const PARTIALS: ReadonlyArray<readonly [multiple: number, gain: number]> = [
@@ -107,6 +108,11 @@ export class AudioEngine implements Sound {
     if (this.ctx.state === 'suspended') void this.ctx.resume();
   }
 
+  /**
+   * The audio context's clock is where sound is made, and the speaker plays it `latency()` later, so what is being heard
+   * at the moment is that much behind it. The song clock is what is heard: a sound made at context time `t` is heard when
+   * this reads `t`, which is why sounds are handed over at their song time as it is.
+   */
   now(): number {
     const ctx = this.ctx;
     if (!ctx) {
@@ -123,6 +129,15 @@ export class AudioEngine implements Sound {
     if (!ctx || !master) return;
     this.songBus = ctx.createGain();
     this.songBus.connect(master);
+    // (For the `?input` readout: what the browser says the speaker delay is, at the start and once the sound is running.)
+    trace(() => this.describeLatency());
+    if (tracing()) window.setTimeout(() => trace(() => this.describeLatency()), 2500);
+  }
+
+  private describeLatency(): string {
+    const ctx = this.ctx;
+    const ms = (seconds: number | undefined) => `${Math.round((seconds ?? 0) * 1000)}ms`;
+    return `audio: speaker delay ${ms(ctx?.outputLatency)}, buffer ${ms(ctx?.baseLatency)}, in use ${ms(this.latency())}`;
   }
 
   stopSong(): void {
@@ -184,11 +199,12 @@ export class AudioEngine implements Sound {
     const buffer = this.decoded.get(url);
     if (!ctx || !songBus || !buffer) return;
 
-    // Second 0 of the recording would sound at `start`; from there it is `rate` times faster than the clock.
-    const start = at + this.latency();
+    // Second 0 of the recording would sound at `start`; from there it is `rate` times faster than the clock. (Song
+    // time is handed over as it is: the delay to the speaker is the one `now` already takes out of the clock.)
+    const start = at;
     let when = start;
     // Started late (a slow frame), or held back until `notBefore`: skip the part that has no time left to play.
-    if (options.notBefore !== undefined) when = Math.max(when, options.notBefore + this.latency());
+    if (options.notBefore !== undefined) when = Math.max(when, options.notBefore);
     when = Math.max(when, ctx.currentTime);
     const from = (when - start) * rate;
     if (from >= buffer.duration) return;
@@ -241,7 +257,8 @@ export class AudioEngine implements Sound {
   schedule(event: MusicEvent, at: number, secondsPerRow: number): void {
     const { ctx, songBus } = this;
     if (!ctx || !songBus) return;
-    const when = Math.max(ctx.currentTime, at + this.latency());
+    // (Song time as it is, like `playRecording`: what is handed over for time `at` is heard when the song clock reads `at`.)
+    const when = Math.max(ctx.currentTime, at);
 
     switch (event.kind) {
       case 'melody':

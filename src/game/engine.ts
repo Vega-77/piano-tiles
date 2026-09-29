@@ -20,6 +20,7 @@ import type { BarZone, Fx } from './effects';
 import { TileRenderer } from './renderer';
 import { getBest, recordRun } from './storage';
 import { Timeline } from './timeline';
+import { signedMs, trace } from './trace';
 
 export interface RunStats {
   perfect: number;
@@ -38,6 +39,8 @@ export interface GameOverResult {
   isNewBest: boolean;
   songId: string;
   reason: FailReason;
+  /** For a tap that missed (`early`, or a `miss` that was a late tap): how far off it was, in milliseconds. */
+  by?: number;
   stats: RunStats;
 }
 
@@ -52,8 +55,8 @@ interface EngineOptions {
 }
 
 type Failure =
-  | { kind: 'miss'; tiles: Tile[] }
-  | { kind: 'early'; tile: Tile }
+  | { kind: 'miss'; tiles: Tile[]; late?: number }
+  | { kind: 'early'; tile: Tile; by: number }
   | { kind: 'wrong'; lane: number; rowY: number };
 
 const JUDGMENT_LABEL: Record<Judgment, string> = { perfect: 'PERFECT', good: 'GOOD', ok: 'OK' };
@@ -77,9 +80,13 @@ const SILENCE: readonly MusicEvent[] = [];
 
 /**
  * After a pause, seconds before the first count-in tick: the audio clock takes a moment to get
- * going again, and a tick scheduled into that moment would come late.
+ * going again, and a tick scheduled into that moment would come late. (It also has to be longer
+ * than the delay to the speaker, which the song clock is that far behind the audio context's.)
  */
-const RESUME_MARGIN = 0.15;
+const RESUME_MARGIN = 0.4;
+
+/** A frame this many milliseconds after the one before is worth a line in the `?input` readout. */
+const SLOW_FRAME_MS = 50;
 
 export function createInitialState(): GameState {
   return {
@@ -168,6 +175,7 @@ export class GameEngine {
   private stats: RunStats = { perfect: 0, good: 0, ok: 0, maxChain: 0, tiles: 0, laps: 0 };
   private lastCleared: { lane: number; time: number } | null = null;
   private rafId = 0;
+  private lastFrameAt = 0;
 
   constructor(options: EngineOptions) {
     this.renderer = new TileRenderer(options.layer);
@@ -218,6 +226,7 @@ export class GameEngine {
     this.combo = 0;
     this.stats = { perfect: 0, good: 0, ok: 0, maxChain: 0, tiles: 0, laps: 0 };
     this.lastCleared = null;
+    this.lastFrameAt = 0;
 
     this.effects.setTheme(song.hue, song.hue2);
     this.effects.setEnergy(0);
@@ -328,11 +337,16 @@ export class GameEngine {
    * A finger (or key) went down in `lane`. It goes to the tile in that lane belonging to the
    * next beat, and is graded by how close it is to the moment that tile is centred on the bar.
    * Tap so early (or so late) that the tile doesn't line up with the bar, and the game is over.
-   * `key` identifies the pointer so a hold can be released later.
+   * `key` identifies the pointer so a hold can be released later. `age` is how long ago, in seconds, the
+   * finger really came down when the page only heard of it late: a tap is graded when it happened.
    */
-  press(lane: number, key: string): void {
-    if (this.state.status !== 'playing' || this.state.paused || this.counting()) return;
-    const now = this.clock();
+  press(lane: number, key: string, age = 0): void {
+    if (this.state.status !== 'playing' || this.state.paused) return;
+    if (this.counting()) {
+      trace(() => `tap L${lane}: ignored, the count-in is still going`);
+      return;
+    }
+    const now = this.clock() - age;
     this.sync(now);
     const pending = this.pendingBeats();
     if (pending.length === 0) return;
@@ -360,35 +374,48 @@ export class GameEngine {
     }
 
     // The next tile isn't on screen yet, so there's nothing to aim at: ignore the press.
-    if (!group.some((t) => this.reachable(t))) return;
+    if (!group.some((t) => this.reachable(t))) {
+      trace(() => `tap L${lane}: ignored, no tile in view yet`);
+      return;
+    }
 
     const tile = group.find((t) => t.lane === lane);
     if (!tile) {
       // A stray repeat on a lane cleared a moment ago isn't fatal; anything else is a blank tap.
       const last = this.lastCleared;
       if (last && last.lane === lane && now - last.time < DOUBLE_TAP_GUARD) return;
+      trace(() => `tap L${lane}: no tile there, they are in L${group.map((t) => t.lane).join(' and L')}: game over`);
       this.endGame({ kind: 'wrong', lane, rowY: group[0].yPos + (group[0].rows - 1) * TILE_HEIGHT });
       return;
     }
-    if (!this.isPressable(tile)) return;
+    if (!this.isPressable(tile)) {
+      trace(() => `tap L${lane}: ignored, that tile is already ${tile.isHit ? 'cleared' : 'held'}`);
+      return;
+    }
 
     const delta = now - tile.time;
     const { judgment, early } = judge(delta);
+    const heard = age > 0.004 ? `, heard ${Math.round(age * 1000)}ms late` : '';
     if (!judgment) {
-      this.endGame(delta < 0 ? { kind: 'early', tile } : { kind: 'miss', tiles: [tile] });
+      trace(() => `tap L${lane}: ${signedMs(delta)} is too ${delta < 0 ? 'early' : 'late'}${heard}: game over`);
+      const by = Math.round(Math.abs(delta) * 1000);
+      this.endGame(delta < 0 ? { kind: 'early', tile, by } : { kind: 'miss', tiles: [tile], late: by });
       return;
     }
+    trace(() => `tap L${lane}: ${judgment} ${signedMs(delta)}${heard}`);
     this.hit(tile, key, now, judgment, early);
   }
 
-  /** A finger (or key) came up. Letting go of a hold tile just stops it paying out. */
-  release(key: string): void {
+  /** A finger (or key) came up. Letting go of a hold tile just stops it paying out. `age` is as for `press`. */
+  release(key: string, age = 0): void {
     if (this.state.status !== 'playing' || this.state.paused) return;
     const tile = this.tiles.find((t) => t.hold?.phase === 'holding' && t.hold.pointer === key);
     if (!tile?.hold) return;
-    const now = this.clock();
+    const hold = tile.hold;
+    const now = this.clock() - age;
+    trace(() => `let go of L${tile.lane} after ${Math.round((now - tile.time) * 1000)}ms of ${Math.round((hold.end - tile.time) * 1000)}ms`);
     this.payTicks(tile, now);
-    this.finishHold(tile, now >= tile.hold.end);
+    this.finishHold(tile, now >= hold.end);
   }
 
   /**
@@ -409,6 +436,12 @@ export class GameEngine {
 
   private frame = (): void => {
     if (this.state.status !== 'playing') return;
+    const at = performance.now();
+    // (For the `?input` readout: a frame that took long is a moment in which taps wait to be heard.)
+    if (at - this.lastFrameAt > SLOW_FRAME_MS && this.lastFrameAt > 0 && !this.state.paused) {
+      trace(() => `slow frame: ${Math.round(at - this.lastFrameAt)}ms since the last`);
+    }
+    this.lastFrameAt = at;
     if (!this.state.paused) {
       this.showResumeCount();
       this.update(this.clock());
@@ -451,6 +484,7 @@ export class GameEngine {
       (t) => t.beat === beat && !t.isHit && t.hold?.phase !== 'holding' && now - t.time > OK_WINDOW,
     );
     if (missed.length > 0) {
+      trace(() => `missed L${missed.map((t) => t.lane).join(' and L')}: nothing tapped in time, game over`);
       this.endGame({ kind: 'miss', tiles: missed });
       return;
     }
@@ -684,7 +718,8 @@ export class GameEngine {
     const { score, songId } = this.state;
     const { stats, isNewBest } = recordRun(songId, { score, maxChain: this.stats.maxChain, laps: this.lap });
     this.setState({ status: 'gameover', highScore: stats.best, combo: 0, comboMultiplier: 1 });
-    this.onGameOver?.({ score, isNewBest, songId, reason: failure.kind, stats: { ...this.stats, laps: this.lap } });
+    const by = failure.kind === 'early' ? failure.by : failure.kind === 'miss' ? failure.late : undefined;
+    this.onGameOver?.({ score, isNewBest, songId, reason: failure.kind, by, stats: { ...this.stats, laps: this.lap } });
   }
 
   /** Beats that still have an uncleared tile, lowest first. */

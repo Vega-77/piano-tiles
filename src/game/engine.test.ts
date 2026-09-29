@@ -517,6 +517,44 @@ describe('timing judgments', () => {
     expect(results[0].reason).toBe('miss');
   });
 
+  it('says how far off a tap was that ended the game, and nothing for a tile that was never tapped', () => {
+    const early = setup([tap(), tap()]);
+    tapAt(early.engine, firstTile(early.engine), -0.4);
+    expect(early.results[0]).toMatchObject({ reason: 'early', by: 400 });
+
+    const late = setup([tap(), tap()]);
+    const tile = firstTile(late.engine);
+    goTo(tile.time + 0.1);
+    songTime = tile.time + 0.31;
+    late.engine.press(tile.lane, 'p1');
+    expect(late.results[0]).toMatchObject({ reason: 'miss', by: 310 });
+
+    const never = setup([tap(), tap()]);
+    goTo(firstTile(never.engine).time + OK_WINDOW + 0.05);
+    expect(never.results[0].reason).toBe('miss');
+    expect(never.results[0].by).toBeUndefined();
+  });
+
+  describe('a tap that the page only heard of after a delay', () => {
+    it('is graded at the moment it happened, not the moment it was heard', () => {
+      const { engine, results } = setup([tap(), tap()]);
+      const tile = firstTile(engine);
+      songTime = tile.time + 0.35; // a stall: no frame has run, and the finger landed 0.3 s ago, right on the bar
+      engine.press(tile.lane, 'p1', 0.3);
+      expect(engine.getState()).toMatchObject({ status: 'playing', score: POINTS.perfect });
+      expect(results).toHaveLength(0);
+    });
+
+    it('is a miss all the same if it happened too late', () => {
+      const { engine, results } = setup([tap(), tap()]);
+      const tile = firstTile(engine);
+      songTime = tile.time + 0.55;
+      engine.press(tile.lane, 'p1', 0.2); // it landed 0.35 s after the bar
+      expect(results[0]).toMatchObject({ reason: 'miss', by: 350 });
+    });
+
+  });
+
   it('ignores a press before the next tile is even on screen', () => {
     const { engine, t0, rate } = setup([tap(), tap()], { onBoard: false });
     goTo(t0 - 4 / rate); // the first tile has been laid out, still above the top of the board
@@ -756,6 +794,24 @@ describe('double holds', () => {
     expect(engine.getState().status).toBe('playing');
   });
 
+  it('survive two quick taps, one per finger, that are over almost as soon as they began', () => {
+    // What a touchscreen often makes of a "hold": each finger is down for 10-20 ms.
+    const { engine, left, right, t0 } = setupDoubleHold();
+    goTo(t0);
+    engine.press(left.lane, 'p1');
+    engine.press(right.lane, 'p2');
+    songTime = t0 + 0.012;
+    engine.release('p1');
+    songTime = t0 + 0.02;
+    engine.release('p2');
+    expect(engine.getState()).toMatchObject({ status: 'playing', score: 2 * POINTS.perfect });
+    expect([left.isHit, right.isHit]).toEqual([true, true]);
+
+    const next = must(engine.getTiles().find((t) => t.beat === 1));
+    tapAt(engine, next, 0, 'p3');
+    expect(engine.getState()).toMatchObject({ status: 'playing', score: 3 * POINTS.perfect });
+  });
+
   it('let the next tile be tapped when one half was let go of early and the other is still held', () => {
     const { engine, left, right, t0 } = setupDoubleHold(3, 100);
     tapAt(engine, left, 0, 'p1');
@@ -855,6 +911,18 @@ describe('hold tiles', () => {
     songTime = t0 + spacing * 3 + 0.01; // no frame has run since
     engine.release('p1');
     expect(engine.getState().score).toBe(POINTS.perfect + 3 * HOLD_TICK_POINTS);
+  });
+
+  it('pay only up to when the finger really came up, if the page heard of it late', () => {
+    const { engine, tile, t0, spacing } = setupHold();
+    tapAt(engine, tile, 0);
+    goTo(t0 + spacing * 2.2);
+    // The finger came up 2.5 spacings in and the page heard of it 0.7 spacings later, between frames:
+    // two ticks had been earned by then, not three.
+    songTime = t0 + spacing * 3.2;
+    engine.release('p1', spacing * 0.7);
+    expect(tile.hold?.phase).toBe('done');
+    expect(engine.getState().score).toBe(POINTS.perfect + 2 * HOLD_TICK_POINTS);
   });
 
   it('can be released the instant after pressing, keeping the tap points', () => {
@@ -1230,7 +1298,10 @@ describe('counting in, on the way in and after a pause', () => {
       expect(calls.silenced).toBe(1);
       expect(kinds(ticks)).toEqual(['kick', 'hat', 'hat', 'hat', 'hat']);
       const start = ticks[0].at;
-      expect(start - 200).toBeGreaterThan(0); // (a moment for the audio clock to catch up)
+      // (A moment for the audio clock to catch up, and more than the longest delay to the speaker that is made up for
+      // (a quarter of a second): the song clock is that far behind the audio context's, and a tick handed over for a time
+      // that has already gone by on the context's would come late.)
+      expect(start - 200).toBeGreaterThan(0.25);
       expect(start - 200).toBeLessThan(0.5);
       ticks.forEach((tick, i) => expect(tick.at).toBeCloseTo(start + Math.max(0, i - 1) * beat, 9));
       for (const tick of ticks) expect(tick.secondsPerRow).toBeCloseTo(1 / rate, 9);
@@ -1269,7 +1340,7 @@ describe('counting in, on the way in and after a pause', () => {
       const y = tile.yPos;
       songTime = 200;
       engine.resume();
-      runTo(203.2); // the count-in is nearly over (the song moves again at 203.25)
+      runTo(203.45); // the count-in is nearly over (the song moves again at 203.5)
 
       expect(tile.yPos).toBeCloseTo(y, 9);
       expect(tile.time).toBeCloseTo(t0 + 1.5, 9);
@@ -1278,7 +1349,7 @@ describe('counting in, on the way in and after a pause', () => {
       engine.press((tile.lane + 1) % 4, 'p8'); // not even a wrong lane counts
       expect(engine.getState()).toMatchObject({ status: 'playing', score });
 
-      goTo(203.65); // 0.4s of song after the count: row 3 is on the bar
+      goTo(203.9); // 0.4s of song after the count: row 3 is on the bar
       expect(centre(tile)).toBeCloseTo(BAR_Y, 6);
       engine.press(tile.lane, 'p1');
       expect(engine.getState().score - score).toBeGreaterThanOrEqual(POINTS.perfect);
@@ -1288,15 +1359,15 @@ describe('counting in, on the way in and after a pause', () => {
       const { engine, counts } = pausedAfterThree(0.1);
       songTime = 200;
       engine.resume();
-      runTo(200.1);
+      runTo(200.35);
       expect(counts).toEqual([]);
-      runTo(200.3);
+      runTo(200.55);
       expect(counts).toEqual(['4']);
-      runTo(201.3);
+      runTo(201.55);
       expect(counts).toEqual(['4', '3']);
-      runTo(203.3);
+      runTo(203.55);
       expect(counts).toEqual(['4', '3', '2', '1']);
-      runTo(203.5);
+      runTo(203.75);
       expect(counts).toEqual(['4', '3', '2', '1']);
     });
 
@@ -1304,7 +1375,7 @@ describe('counting in, on the way in and after a pause', () => {
       const { engine, counts, scheduled } = pausedAfterThree(0.1);
       songTime = 200;
       engine.resume();
-      runTo(201.3);
+      runTo(201.55);
       expect(counts).toEqual(['4', '3']);
       engine.pause();
       songTime = 300;
@@ -1313,10 +1384,10 @@ describe('counting in, on the way in and after a pause', () => {
 
       expect(kinds(scheduled.slice(before))).toEqual(['kick', 'hat', 'hat', 'hat', 'hat']);
       counts.length = 0;
-      runTo(303.3);
+      runTo(303.55);
       expect(counts).toEqual(['4', '3', '2', '1']);
       const tile = must(nextBeat(engine)[0]);
-      goTo(303.65); // the song had not moved: 0.4s past the count is row 3 again
+      goTo(303.9); // the song had not moved: 0.4s past the count is row 3 again
       expect(centre(tile)).toBeCloseTo(BAR_Y, 6);
     });
 
@@ -1369,9 +1440,9 @@ describe('counting in, on the way in and after a pause', () => {
       expect(played).toHaveLength(2);
       const again = played[1];
       expect(again).toMatchObject({ url: recording.url, rate: 1, end: 3.5 });
-      expect(again.notBefore).toBeCloseTo(203.25, 6); // where the song moves again
+      expect(again.notBefore).toBeCloseTo(203.5, 6); // where the song moves again
       // It is timed so the recording's beat grid lands where the rows will: 0.13s before row 0.
-      expect(again.at).toBeCloseTo(t0 - 0.13 + (203.25 - (t0 + 1.1)), 6);
+      expect(again.at).toBeCloseTo(t0 - 0.13 + (203.5 - (t0 + 1.1)), 6);
     });
   });
 });

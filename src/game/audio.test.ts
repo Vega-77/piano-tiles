@@ -98,6 +98,46 @@ async function ready() {
 beforeEach(() => vi.stubGlobal('AudioContext', FakeContext));
 afterEach(() => vi.unstubAllGlobals());
 
+describe('a speaker that plays what it is given some time later', () => {
+  it('has a song clock that is what is being heard, that far behind the audio clock', async () => {
+    const { engine, ctx } = await ready();
+    ctx.outputLatency = 0.12;
+    expect(engine.now()).toBeCloseTo(10 - 0.12, 9);
+  });
+
+  it('is handed a recording at the song time wanted, since the delay puts it there when it is heard', async () => {
+    const { engine, ctx } = await ready();
+    ctx.outputLatency = 0.12;
+    engine.playRecording(URL, 11, 1, { end: 75 });
+    // (The song clock reads 11 when the audio clock reads 11.12, and 11.12 is when a sound handed over at 11 is heard.)
+    expect(ctx.sources[0].startedAt).toEqual({ when: 11, from: 0 });
+    expect(ctx.sources[0].stoppedAt).toEqual([11 + 75 + 0.02]);
+  });
+
+  it('does not push a recording that has to wait for a count-in back by the delay either', async () => {
+    const { engine, ctx } = await ready();
+    ctx.outputLatency = 0.12;
+    engine.playRecording(URL, 11, 2, { notBefore: 12.5, end: 60 });
+    expect(ctx.sources[0].startedAt).toEqual({ when: 12.5, from: 3 });
+  });
+
+  it('is never handed anything for a time that has already gone by on the audio clock', async () => {
+    const { engine, ctx } = await ready();
+    ctx.outputLatency = 0.12;
+    engine.playRecording(URL, 9.9, 1, { end: 75 }); // the audio clock is at 10
+    expect(ctx.sources[0].startedAt?.when).toBe(10);
+    expect(ctx.sources[0].startedAt?.from).toBeCloseTo(0.1, 9);
+  });
+
+  it('uses the buffer size when the speaker delay is not known, and never more than a quarter second', async () => {
+    const { engine, ctx } = await ready();
+    ctx.baseLatency = 0.02;
+    expect(engine.now()).toBeCloseTo(10 - 0.02, 9);
+    ctx.outputLatency = 3; // (a bogus report)
+    expect(engine.now()).toBeCloseTo(10 - 0.25, 9);
+  });
+});
+
 describe('playing a recording', () => {
   it('starts a recording that is cut short before it schedules its stop', async () => {
     const { engine, ctx } = await ready();

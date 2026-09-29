@@ -3,6 +3,7 @@ import { LANES } from '../config';
 import { AudioEngine } from '../game/audio';
 import { Effects } from '../game/effects';
 import { createInitialState, GameEngine, type GameOverResult } from '../game/engine';
+import { eventAge } from '../game/input';
 import { loadStats, type StatsMap } from '../game/storage';
 import { readStoredAudio } from '../songs/store';
 import type { GameState, Song } from '../types';
@@ -86,9 +87,9 @@ export function useGame(songs: readonly Song[], prepare?: Prepare) {
         return;
       }
       const lane = LANE_KEYS[e.code];
-      if (lane !== undefined) engine.press(lane, `k:${e.code}`);
+      if (lane !== undefined) engine.press(lane, `k:${e.code}`, eventAge(e));
     };
-    const onKeyUp = (e: KeyboardEvent) => engine.release(`k:${e.code}`);
+    const onKeyUp = (e: KeyboardEvent) => engine.release(`k:${e.code}`, eventAge(e));
     // The song runs on the audio clock, so freeze it when the player leaves the tab.
     const onVisibility = () => {
       if (document.hidden) engine.pause();
@@ -165,11 +166,11 @@ export function useGame(songs: readonly Song[], prepare?: Prepare) {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = (e.clientX - rect.left) / rect.width;
     const lane = Math.min(LANES - 1, Math.max(0, Math.floor(x * LANES)));
-    engineRef.current?.press(lane, `p${e.pointerId}`);
+    engineRef.current?.press(lane, `p${e.pointerId}`, eventAge(e.nativeEvent));
   }, []);
 
   const handlePointerUp = useCallback((e: PointerEvent<HTMLDivElement>) => {
-    engineRef.current?.release(`p${e.pointerId}`);
+    engineRef.current?.release(`p${e.pointerId}`, eventAge(e.nativeEvent));
   }, []);
 
   return {

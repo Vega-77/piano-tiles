@@ -29,7 +29,7 @@ npm run preview  # serve the production build
 - Tap a lane with no tile in it, leave a tile too long, or tap one far too early, and it's over.
 - The game pauses itself if you switch tabs.
 - **Resuming counts you back in.** After a pause, the music and tiles stay frozen until a four-beat 4-3-2-1 has played out at the tempo you were playing at, ticking on the beat. Taps are ignored while it counts. Pausing again mid-count starts the count over.
-- **Touches not doing what they should?** Add `?input` to the end of the game's address (`…/piano-tiles/?input`). A small readout at the bottom shows every finger that goes down, comes up or is cancelled by the browser, and how many are down, so it can be seen whether the screen is sending what the game expects.
+- **Touches not doing what they should?** Add `?input` to the end of the game's address (`…/piano-tiles/?input`). A small readout at the bottom shows every finger that goes down, comes up or is cancelled by the browser, and how many are down, so it can be seen whether the screen is sending what the game expects. Under each finger it says what the game made of the tap (`tap L3: good +120ms`: which lane, the grade, and how early (−) or late (+) it was; or why it was ignored), any frame that took long (`slow frame`), and the audio's delay to the speaker. A screenshot of it, with the game over text, says what went wrong.
 
 ### The timing bar
 
@@ -44,7 +44,9 @@ The glowing bar is where the **middle of each tile** should be when you tap it. 
 
 A Good or OK hit also shows a coloured tag under its name, **blue EARLY** or **orange LATE**, so you can tell which way you missed; a perfect hit has none.
 
-Timing is measured in seconds, not pixels, so the windows stay fair however fast the tiles fall. The bar's zones grow as the tiles speed up so they always show what the windows actually are. Tapping before the next tile has scrolled into view is simply ignored.
+Timing is measured in seconds, not pixels, so the windows stay fair however fast the tiles fall. The bar's zones grow as the tiles speed up so they always show what the windows actually are. Tapping before the next tile has scrolled into view is simply ignored. A tap is graded at the moment the finger (or key) landed, not the moment the page got round to hearing of it, so a slow frame doesn't make a tap late. The game over screen says how many milliseconds early or late the tap was that ended the run.
+
+The music is played so that what you *hear* is on the song clock, whatever the speaker's delay (a Bluetooth speaker or headphones can be a fifth of a second behind what the device hands over); the tiles are drawn on that same clock.
 
 ### Chains
 
@@ -192,6 +194,7 @@ The 60fps loop lives outside React so per-frame movement never triggers a render
 | `src/game/engine.ts` | Frame loop, beat layout (gaps included), tap/double/hold rules, judgments, chains, laps |
 | `src/game/renderer.ts` | Owns the tile DOM nodes; positions are written straight to `transform` |
 | `src/components/Board.tsx`, `InputLog.tsx` | The board takes every finger as its own pointer (a cancelled touch is not a release, and the browser is kept from starting gestures on it); `InputLog` is the `?input` readout |
+| `src/game/input.ts`, `trace.ts` | `eventAge` says how long ago a touch or key really happened (taps are graded then); `trace` is the one-line-at-a-time feed of what the engine did with each tap that the `?input` readout listens to (nothing is built when it isn't open) |
 | `src/game/effects.ts` | Canvas visuals: animated backdrop, the timing bar, hit bursts, ripples, popups, banners |
 | `src/game/audio.ts` | Web Audio: plays a song's recording at each lap's speed. It also has a small synth (lead, drums, bass, chords) for a song that has notes instead of a recording, which the tests use |
 | `src/game/storage.ts` | Per-song best score, chain and laps |

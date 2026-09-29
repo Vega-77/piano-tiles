@@ -1,5 +1,6 @@
 import { createElement } from 'react';
 import { describe, expect, it } from 'vitest';
+import { trace, tracing } from '../game/trace';
 import { mount, settle } from '../hooks/testing';
 import { InputLog, wantsInputLog } from './InputLog';
 
@@ -37,9 +38,19 @@ describe('the input readout', () => {
     const { container, unmount } = await mount(createElement(InputLog));
     for (let i = 0; i < 20; i++) await settle(() => void document.body.dispatchEvent(touch('pointerup', 100 + i)));
     const lines = container.querySelectorAll('p');
-    expect(lines.length).toBe(10); // the count, and nine lines
+    expect(lines.length).toBe(15); // the count, and fourteen lines
     expect(container.textContent).toContain('#119');
-    expect(container.textContent).not.toContain('#100 ');
+    expect(container.textContent).toContain('#106 ');
+    expect(container.textContent).not.toContain('#105 ');
     await unmount();
+  });
+
+  it('also shows what the game made of each tap, for as long as it is on the page', async () => {
+    const { container, unmount } = await mount(createElement(InputLog));
+    expect(tracing()).toBe(true);
+    await settle(() => trace(() => 'tap L2: good +120ms'));
+    expect(container.textContent).toContain('tap L2: good +120ms');
+    await unmount();
+    expect(tracing()).toBe(false);
   });
 });
