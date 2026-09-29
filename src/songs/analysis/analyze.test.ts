@@ -1,10 +1,11 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { movingAverage, percentile, resampleMono } from './dsp';
 import { AnalysisError, DENSITIES, MAX_SECONDS, analyze, hueOf, type Measured } from './analyze';
-import { SAMPLE_RATE, computeFeatures } from './features';
-import { MAX_ROWS_PER_SECOND, MIN_ROWS_PER_SECOND, pickRowsPerBeat, rowsPerBeatForBpm } from './grid';
+import { ENV_LAG, FPS, SAMPLE_RATE, computeFeatures, type Features } from './features';
+import { MAX_ROWS_PER_SECOND, MIN_ROWS_PER_SECOND, pickRowsPerBeat, rowsPerBeatForBpm, type Grid } from './grid';
+import { LENGTHS, LENGTH_SECONDS } from './length';
 import { synthForAnalysis } from './synth';
-import { DEFAULT_DENSITY, DENSITY, densityFrom } from './tiles';
+import { DEFAULT_DENSITY, DENSITY, beatOffset, densityFrom } from './tiles';
 
 /**
  * These run the analyser on songs made here, where the true tempo and the first beat are known, so
@@ -90,6 +91,49 @@ describe('the analyser on made-up songs', () => {
     expect(medium).toBeLessThan(hard);
   }, SLOW);
 
+  describe('doubles', () => {
+    const tokensOf = (chart: Measured) => chart.chart.split(/\s+/).filter(Boolean);
+    const shareOfDoubles = (chart: Measured) => {
+      const tiles = tokensOf(chart).filter((token) => token !== '.');
+      return tiles.filter((token) => token === 'xx').length / tiles.length;
+    };
+
+    for (const density of DENSITIES) {
+      it(`are a real part of ${density}, and never more than its cap`, () => {
+        const share = shareOfDoubles(analyze(songs.b.samples!, { density }));
+        expect(share).toBeGreaterThanOrEqual(0.8 * DENSITY[density].doubles);
+        expect(share).toBeLessThanOrEqual(DENSITY[density].doubles + 1e-9);
+      }, SLOW);
+    }
+
+    it('grow with the level, and come more often than one tile in ten from Medium up', () => {
+      const [easy, medium, hard] = DENSITIES.map((density) => shareOfDoubles(analyze(songs.a.samples!, { density })));
+      expect(easy).toBeGreaterThan(0.08);
+      expect(medium).toBeGreaterThan(easy);
+      expect(hard).toBeGreaterThan(medium);
+      expect(medium).toBeGreaterThan(0.15);
+    }, SLOW);
+
+    it('are spread through the song, not gathered in one place', () => {
+      const chart = analyze(songs.b.samples!, MEDIUM);
+      const quarter = chart.analysis!.rows / 4;
+      const inQuarter = [0, 0, 0, 0];
+      let position = 0;
+      for (const token of tokensOf(chart)) {
+        if (token === 'xx') inQuarter[Math.min(3, Math.trunc(position / quarter))]++;
+        position += token.startsWith('x~') ? Number(token.slice(2)) : token.startsWith('.') && token.length > 1 ? Number(token.slice(1)) : 1;
+      }
+      for (const count of inQuarter) expect(count).toBeGreaterThan(0);
+    }, SLOW);
+
+    it('never sit on two rows in a row', () => {
+      for (const density of DENSITIES) {
+        const tokens = tokensOf(analyze(songs.b.samples!, { density }));
+        for (let i = 1; i < tokens.length; i++) expect(tokens[i] === 'xx' && tokens[i - 1] === 'xx').toBe(false);
+      }
+    }, SLOW);
+  });
+
   it('never asks for more taps a second than a hand can give, even on Hard', () => {
     for (const key of ['a', 'c']) {
       const chart = analyze(songs[key].samples!, { density: 'hard' });
@@ -136,6 +180,81 @@ describe('the analyser on made-up songs', () => {
     }
     expect(onBeat / total).toBeGreaterThan(0.7);
   }, SLOW);
+
+  for (const key of ['a', 'b', 'c', 'd']) {
+    const song = songs[key];
+    it(`starts row 0 on a beat of the ${song.bpm} BPM song, so a count-in ticks with the music`, () => {
+      const chart = analyze(song.samples!, MEDIUM);
+      expect(chart.bpm).toBeCloseTo(song.bpm, 0);
+      const beat = 60 / song.bpm;
+      const diff = (((chart.offset - song.offset) % beat) + beat) % beat;
+      expect(Math.min(diff, beat - diff) * 1000).toBeLessThan(8);
+    }, SLOW);
+  }
+
+  describe('a song longer than a lap', () => {
+    const seconds = 150;
+    const bpm = 120;
+    const offset = 0.37;
+    let samples: Float32Array;
+    beforeAll(async () => {
+      samples = await synthForAnalysis({ bpm, offset, seconds, seed: 11 });
+    }, SLOW);
+
+    /** Rows the chart writes: each token is a row, except a hold, which takes its own length. */
+    const rowsWritten = (chart: Measured) =>
+      chart.chart
+        .split(/\s+/)
+        .filter(Boolean)
+        .reduce((sum, token) => sum + (token.startsWith('x~') ? Number(token.slice(2)) : 1), 0);
+
+    for (const length of LENGTHS) {
+      const { min, max } = LENGTH_SECONDS[length];
+      it(`is stopped between ${min} and ${max} seconds on ${length}, on a bar line`, () => {
+        const chart = analyze(samples, { ...MEDIUM, length });
+        const end = chart.end!;
+        expect(end).toBeGreaterThanOrEqual(min);
+        expect(end).toBeLessThanOrEqual(max);
+        expect(chart.duration).toBeCloseTo(seconds, 1); // (the audio is kept whole, only the lap is cut)
+        expect(chart.analysis!.length).toBe(length);
+
+        // A whole number of bars from the first beat...
+        const row = 60 / (chart.bpm * chart.rowsPerBeat);
+        const rows = (end - chart.offset) / row;
+        expect(Math.abs(rows - Math.round(rows))).toBeLessThan(0.02);
+        expect(Math.round(rows) % (4 * chart.rowsPerBeat)).toBe(0);
+        // ...on a real bar line of the song (its beats fall every half second from 0.37 s, its bars every two).
+        const bars = (end - offset) / (4 * (60 / bpm));
+        expect(Math.min(bars - Math.floor(bars), Math.ceil(bars) - bars) * 4 * (60 / bpm) * 1000).toBeLessThan(10);
+
+        // The tiles cover the lap and stop with it (a hold at the very end may run a few rows over).
+        expect(chart.analysis!.rows).toBe(Math.round(rows));
+        expect(rowsWritten(chart)).toBeGreaterThanOrEqual(chart.analysis!.rows);
+        expect(rowsWritten(chart)).toBeLessThanOrEqual(chart.analysis!.rows + 3);
+      }, SLOW);
+    }
+
+    it('plays a song that is short enough whole, and says so by leaving the stop out', () => {
+      const chart = analyze(songs.b.samples!, { ...MEDIUM, length: 'long' }); // 75 s, under the 90 s of Long
+      expect(chart.end).toBeUndefined();
+      expect('end' in chart).toBe(true); // (present, so charting a song again clears an older stop)
+      const row = 60 / (chart.bpm * chart.rowsPerBeat);
+      expect(chart.analysis!.rows).toBe(Math.ceil((chart.duration - chart.offset) / row - 1e-9));
+    }, SLOW);
+
+    it('stops a 75 second song asked to be a Short one', () => {
+      const chart = analyze(songs.b.samples!, { ...MEDIUM, length: 'short' });
+      expect(chart.end!).toBeGreaterThanOrEqual(60);
+      expect(chart.end!).toBeLessThanOrEqual(70);
+    }, SLOW);
+
+    it('is Medium unless asked for another, and only listens to what is played', () => {
+      const chart = analyze(samples, { density: 'medium' });
+      expect(chart.analysis!.length).toBe('medium');
+      expect(chart.end!).toBeGreaterThanOrEqual(70);
+      expect(chart.end!).toBeLessThanOrEqual(80);
+    }, SLOW);
+  });
 
   describe('a song with quiet verses and a loud chorus', () => {
     const verse = (time: number) => time % 32 < 16;
@@ -226,6 +345,41 @@ describe('audio that cannot be charted', () => {
 
   it('refuses a song that is too long', () => {
     expect(() => analyze(new Float32Array(SAMPLE_RATE * (MAX_SECONDS + 1)), MEDIUM)).toThrow(/minutes long/);
+  });
+});
+
+describe('finding which row is a beat', () => {
+  /** A recording with a hit on every row for which `hits(row)` is true (a click each, all as strong). */
+  function hitsOn(grid: Grid, rows: number, hits: (row: number) => boolean): Features {
+    const frames = Math.ceil((rows / grid.rate + 1) * FPS);
+    const env = new Float64Array(frames);
+    for (let k = 0; k < rows; k++) {
+      if (hits(k)) env[Math.round((grid.phase + k / grid.rate - ENV_LAG) * FPS)] = 1;
+    }
+    return { env, low: env, mid: env, high: env, rms: new Float64Array(frames), duration: frames / FPS };
+  }
+  const grid: Grid = { rate: 4, phase: 0.2, score: 1, contrast: 1 };
+
+  it('says how many rows the first beat is after row 0', () => {
+    for (const first of [0, 1]) {
+      const features = hitsOn(grid, 80, (row) => row % 2 === first);
+      expect(beatOffset(features, grid, 2)).toBe(first);
+    }
+    for (const first of [0, 1, 2, 3]) {
+      const features = hitsOn({ ...grid, rate: 4 }, 80, (row) => row % 4 === first);
+      expect(beatOffset(features, grid, 4)).toBe(first);
+    }
+  });
+
+  it('goes for the strongest hits, not the most', () => {
+    const features = hitsOn(grid, 80, (row) => row % 2 === 0);
+    // Weak clicks on every row in between, as hats are: the kicks still say where the beat is.
+    for (let k = 1; k < 80; k += 2) features.env[Math.round((grid.phase + k / grid.rate - ENV_LAG) * FPS)] = 0.3;
+    expect(beatOffset(features, grid, 2)).toBe(0);
+  });
+
+  it('has nothing to decide when a beat is one row', () => {
+    expect(beatOffset(hitsOn(grid, 80, (row) => row % 3 === 2), grid, 1)).toBe(0);
   });
 });
 

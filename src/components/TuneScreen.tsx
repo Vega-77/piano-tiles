@@ -1,15 +1,33 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { MAX_NUDGE, type ChartFile } from '../songs/chart';
-import { DENSITIES, type Density, type RechartOptions, type TuneOptions } from '../songs/importer';
+import { DENSITIES, LENGTHS, LENGTH_SECONDS, type Density, type Length, type RechartOptions, type TuneOptions } from '../songs/importer';
 import { DIFFICULTY_LABELS } from '../songs/songs';
 import type { Song } from '../types';
 
 const DENSITY_LABELS: Record<Density, string> = { easy: 'Easy', medium: 'Medium', hard: 'Hard' };
 const DENSITY_HINTS: Record<Density, string> = {
-  easy: 'A steady stream of tiles, with room to breathe.',
-  medium: 'Lots of tiles, close together.',
-  hard: 'Tiles on nearly every hit in the music, with more doubles.',
+  easy: 'A steady stream of tiles, with room to breathe and doubles now and then.',
+  medium: 'Lots of tiles, close together, with plenty of doubles.',
+  hard: 'Tiles on nearly every hit in the music, and doubles all the way through.',
 };
+
+const LENGTH_LABELS: Record<Length, string> = { short: 'Short', medium: 'Medium', long: 'Long' };
+
+const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.round(seconds % 60)).padStart(2, '0')}`;
+
+/** What a length setting means, in words. */
+function lengthHint(length: Length): string {
+  const { min, max } = LENGTH_SECONDS[length];
+  return `A song longer than ${max} s is stopped at a bar line between ${min} and ${max} s, at the end of a phrase where it can.`;
+}
+
+/** What the saved chart of this song plays: all of it, or up to where it was stopped. */
+function playsNow(song: Song): string {
+  const recording = song.recording;
+  if (!recording) return '';
+  if (recording.end === undefined) return `Now: plays the whole song (${clock(recording.duration)}).`;
+  return `Now: plays ${clock(recording.end)} of ${clock(recording.duration)}.`;
+}
 
 /** The slider stops short of the file's limit: a song that far off wants a different tempo, not a nudge. */
 const SLIDER_MS = 250;
@@ -55,17 +73,19 @@ export function TuneScreen({ song, busy, status, onTune, onRechart, onSave, onRe
   const info = song.imported;
   const savedNudge = Math.round((info?.nudge ?? 0) * 1000);
   const savedLevel = info?.level ?? 'medium';
+  const savedLength = info?.length ?? 'medium';
   const [title, setTitle] = useState(song.title);
   const [nudge, setNudge] = useState(savedNudge);
   // The tempo as found can have a long tail (99.996); show it to a tenth. Only a typed change counts as by hand.
   const shownBpm = String(Math.round(song.bpm * 10) / 10);
   const [bpm, setBpm] = useState(shownBpm);
   const [level, setLevel] = useState<Density>(savedLevel);
+  const [length, setLength] = useState<Length>(savedLength);
   const [confirming, setConfirming] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
   // What is saved changed (a save or a re-chart came back): start the fields from it again.
-  const saved = `${song.title}|${song.bpm}|${savedNudge}|${savedLevel}`;
+  const saved = `${song.title}|${song.bpm}|${savedNudge}|${savedLevel}|${savedLength}|${song.recording?.end ?? ''}`;
   const [seen, setSeen] = useState(saved);
   if (seen !== saved) {
     setSeen(saved);
@@ -73,6 +93,7 @@ export function TuneScreen({ song, busy, status, onTune, onRechart, onSave, onRe
     setNudge(savedNudge);
     setBpm(shownBpm);
     setLevel(savedLevel);
+    setLength(savedLength);
     setConfirming(false);
   }
 
@@ -230,17 +251,44 @@ export function TuneScreen({ song, busy, status, onTune, onRechart, onSave, onRe
             <p className="mt-1 leading-snug text-white/45">{DENSITY_HINTS[level]}</p>
           </div>
 
+          <div>
+            <span className="mb-1 block font-semibold text-white/85">How long</span>
+            <div className="flex gap-1.5" role="radiogroup" aria-label="How long">
+              {LENGTHS.map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  role="radio"
+                  aria-checked={length === option}
+                  disabled={busy}
+                  onClick={() => setLength(option)}
+                  className={`flex-1 rounded-lg py-2 text-center text-sm font-bold ring-1 ring-white/15 disabled:opacity-50 ${
+                    length === option ? 'bg-white/90 text-black' : 'bg-white/10'
+                  }`}
+                >
+                  {LENGTH_LABELS[option]}
+                  <span className="block text-[0.6rem] font-semibold opacity-70">
+                    {LENGTH_SECONDS[option].min}–{LENGTH_SECONDS[option].max} s
+                  </span>
+                </button>
+              ))}
+            </div>
+            <p className="mt-1 leading-snug text-white/45">
+              {lengthHint(length)} {playsNow(song)}
+            </p>
+          </div>
+
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
               className={small}
               disabled={busy || !bpmOk}
-              onClick={() => rechart(bpmChanged ? { density: level, bpm: bpmValue } : { density: level })}
+              onClick={() => rechart(bpmChanged ? { density: level, length, bpm: bpmValue } : { density: level, length })}
             >
               Re-chart
             </button>
             {info.manualBpm && (
-              <button type="button" className={small} disabled={busy} onClick={() => rechart({ density: level, auto: true })}>
+              <button type="button" className={small} disabled={busy} onClick={() => rechart({ density: level, length, auto: true })}>
                 Find the tempo again
               </button>
             )}

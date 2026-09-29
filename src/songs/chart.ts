@@ -1,5 +1,6 @@
 import { MAX_HOLD_ROWS, MIN_HOLD_ROWS, TILE_HEIGHT } from '../config';
 import type { BeatSpec, Difficulty, Song } from '../types';
+import { lengthFrom } from './analysis/length';
 import { densityFrom } from './analysis/tiles';
 import { beatRows } from './notation';
 
@@ -17,7 +18,7 @@ export interface ChartFile {
   /** Tempo of the beat grid, and how many rows (smallest steps) make up one beat. */
   bpm: number;
   rowsPerBeat: number;
-  /** Seconds into the audio at which row 0 of the chart falls (under one row). */
+  /** Seconds into the audio at which row 0 of the chart falls: the first beat, so under a beat. */
   offset: number;
   /**
    * A correction, in seconds, added to `offset` when the song is played: positive if the tiles land
@@ -27,6 +28,11 @@ export interface ChartFile {
   nudge?: number;
   /** Length of the audio in seconds. */
   duration: number;
+  /**
+   * Where in the audio a lap stops, in seconds, for a song longer than a lap may be: on a bar line,
+   * so a lap is a whole number of bars. Missing means the whole audio is played.
+   */
+  end?: number;
   difficulty: Difficulty;
   hue: number;
   hue2: number;
@@ -52,6 +58,8 @@ export interface ChartAnalysis {
   density: number;
   /** The setting the user picked: easy, medium or hard (older charts say "normal" for easy). */
   level?: string;
+  /** How long a lap was allowed to be: short, medium or long (older charts have none, and play whole). */
+  length?: string;
   /** What the analyser thought was wrong, if anything, in words. */
   warnings?: string[];
 }
@@ -139,9 +147,13 @@ export function rowSeconds(chart: Pick<ChartFile, 'bpm' | 'rowsPerBeat'>): numbe
   return 60 / (chart.bpm * chart.rowsPerBeat);
 }
 
-/** How many rows one lap has: enough to cover all the audio after the first beat. */
-export function chartRows(chart: Pick<ChartFile, 'bpm' | 'rowsPerBeat' | 'offset' | 'duration'>): number {
-  return Math.max(1, Math.ceil((chart.duration - chart.offset) / rowSeconds(chart) - 1e-9));
+/**
+ * How many rows one lap has: enough to cover the audio that is played (all of it, or up to `end`)
+ * after the first beat. A hundredth of a row is forgiven, because the numbers in a chart are rounded
+ * and a lap that ends on a bar line must not gain a row from that.
+ */
+export function chartRows(chart: Pick<ChartFile, 'bpm' | 'rowsPerBeat' | 'offset' | 'duration' | 'end'>): number {
+  return Math.max(1, Math.ceil(((chart.end ?? chart.duration) - chart.offset) / rowSeconds(chart) - 0.01));
 }
 
 function fail(message: string): never {
@@ -191,6 +203,11 @@ export function validateChart(raw: unknown): ChartFile {
     chart: typeof c.chart === 'string' ? c.chart : fail('"chart" is missing'),
   };
   if (c.nudge !== undefined) chart.nudge = numberField(c.nudge, 'nudge', -MAX_NUDGE, MAX_NUDGE);
+  if (c.end !== undefined) {
+    chart.end = numberField(c.end, 'end', 5, 3600);
+    if (chart.end > chart.duration + 0.05) fail('"end" is past the end of the audio');
+    if (chart.end <= chart.offset) fail('"end" must be after "offset"');
+  }
   if (typeof c.analysis === 'object' && c.analysis !== null) chart.analysis = c.analysis as ChartAnalysis;
   return chart;
 }
@@ -242,11 +259,12 @@ export function songFromChart(chart: ChartFile, folderUrl: string): Song {
     hue2: chart.hue2,
     beats,
     track: [],
-    recording: { url: `${base}${chart.audio}`, offset, duration: chart.duration },
+    recording: { url: `${base}${chart.audio}`, offset, duration: chart.duration, ...(chart.end !== undefined && { end: chart.end }) },
     imported: {
       nudge: chart.nudge ?? 0,
       manualBpm: chart.analysis?.manualBpm ?? false,
       level: densityFrom(chart.analysis?.level),
+      length: lengthFrom(chart.analysis?.length),
       confidence: chart.analysis?.confidence,
       warnings: chart.analysis?.warnings ?? [],
     },

@@ -28,9 +28,9 @@ interface Settings {
 }
 
 export const DENSITY: Record<Density, Settings> = {
-  easy: { gap: 2, fraction: 0.4, doubles: 0.03, holds: 0.12 },
-  medium: { gap: 1, fraction: 0.52, doubles: 0.06, holds: 0.1 },
-  hard: { gap: 1, fraction: 0.66, doubles: 0.12, holds: 0.1 },
+  easy: { gap: 2, fraction: 0.4, doubles: 0.12, holds: 0.12 },
+  medium: { gap: 1, fraction: 0.52, doubles: 0.2, holds: 0.1 },
+  hard: { gap: 1, fraction: 0.66, doubles: 0.28, holds: 0.1 },
 };
 
 /** Taps per second no chart is allowed to ask for. */
@@ -123,13 +123,30 @@ function rowLoudness(features: Features, grid: Grid, rows: number): Float64Array
   return total;
 }
 
-/** Which rows fall on the beat: the ones a whole number of beats from the row where the hits are strongest. */
-function onTheBeat(strength: Float64Array, rowsPerBeat: number): Uint8Array {
+/** Which of a beat's rows (0 to rowsPerBeat - 1) the hits are strongest on. */
+function beatResidue(strength: Float64Array, rowsPerBeat: number): number {
   const totals = new Float64Array(rowsPerBeat);
   for (let k = 0; k < strength.length; k++) totals[k % rowsPerBeat] += strength[k];
   let beat = 0;
   for (let i = 1; i < rowsPerBeat; i++) if (totals[i] > totals[beat]) beat = i;
+  return beat;
+}
+
+/** Which rows fall on the beat: the ones a whole number of beats from the row where the hits are strongest. */
+function onTheBeat(strength: Float64Array, rowsPerBeat: number): Uint8Array {
+  const beat = beatResidue(strength, rowsPerBeat);
   return Uint8Array.from(strength, (_, k) => (k % rowsPerBeat === beat ? 1 : 0));
+}
+
+/**
+ * How many rows after the grid's row 0 the first beat falls (0 to rowsPerBeat - 1). The grid only
+ * knows where its rows are, not which of them are beats; the game counts a song in on the beat, so
+ * the grid is moved to start on one.
+ */
+export function beatOffset(features: Features, grid: Grid, rowsPerBeat: number): number {
+  if (rowsPerBeat <= 1) return 0;
+  const rows = Math.max(1, Math.ceil((features.duration - grid.phase) * grid.rate - 1e-9));
+  return beatResidue(slotStrengths(features, grid, rows).strength, rowsPerBeat);
 }
 
 /**
@@ -224,13 +241,32 @@ export function chooseTiles(features: Features, grid: Grid, rows: number, level:
     }
   }
 
-  // Doubles: the hardest hits, where the low, middle and high of the sound all agree.
+  // Doubles: taps on the hits that the most of the low, middle and high of the sound agree on. Every
+  // stretch of the song takes its turn, best hit first, so they are spread through the song and
+  // not all in the loudest part.
   const doubleCap = Math.trunc(settings.doubles * chosen.length);
   if (doubleCap > 0) {
-    const strong = chosen.filter((k) => tokens.get(k)!.kind === 'tap' && agree[k] >= 2).sort((a, b) => strength[b] - strength[a]);
-    for (const k of strong.slice(0, doubleCap)) {
-      const crowded = [k - 1, k + 1].some((j) => tokens.has(j));
-      if (!crowded) tokens.set(k, { kind: 'double', rows: 1 });
+    const byStretch = new Map<number, number[]>();
+    for (const k of chosen) {
+      if (tokens.get(k)!.kind !== 'tap') continue;
+      const stretch = Math.trunc(k / size);
+      byStretch.set(stretch, [...(byStretch.get(stretch) ?? []), k]);
+    }
+    const turns = [...byStretch.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([, taps]) => taps.sort((a, b) => agree[b] - agree[a] || strength[b] - strength[a]));
+    const isDouble = (k: number) => tokens.get(k)?.kind === 'double';
+    let doubles = 0;
+    while (doubles < doubleCap && turns.some((taps) => taps.length > 0)) {
+      for (const taps of turns) {
+        if (doubles >= doubleCap) break;
+        for (let k = taps.shift(); k !== undefined; k = taps.shift()) {
+          if (isDouble(k - 1) || isDouble(k + 1)) continue; // (never two rows of doubles in a row)
+          tokens.set(k, { kind: 'double', rows: 1 });
+          doubles++;
+          break;
+        }
+      }
     }
   }
   return { tokens, rows };
@@ -263,9 +299,9 @@ export function describe(chart: Tiles, grid: Grid, duration: number): { peak: nu
   return { peak: rates.length > 0 ? percentile(rates, 95) : 0, average: starts.length / duration };
 }
 
-/** 1 (beginner) to 5 (expert), from how fast the tiles come and how many there are. */
-export function difficultyOf(peak: number, average: number, doubles: number): 1 | 2 | 3 | 4 | 5 {
+/** 1 (beginner) to 5 (expert), from how fast the tiles come, how many there are and how many are doubles (0–1). */
+export function difficultyOf(peak: number, average: number, doubleShare: number): 1 | 2 | 3 | 4 | 5 {
   const load = 0.5 * peak + 0.5 * average * 1.8;
-  const value = 1 + (load - 1.6) / 0.55 + (doubles > 0 ? 0.3 : 0);
+  const value = 1 + (load - 1.6) / 0.55 + 1.5 * doubleShare;
   return Math.min(5, Math.max(1, Math.floor(value + 0.5))) as 1 | 2 | 3 | 4 | 5;
 }

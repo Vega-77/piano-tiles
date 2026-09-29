@@ -14,9 +14,22 @@ const MAX_LATENCY = 0.25;
 /** How long the previous lap's recording takes to fade out as the next one starts, in seconds. */
 const LAP_FADE = 0.04;
 
+/** How long a recording that is stopped at its end (rather than played out) takes to fade away, in seconds. */
+const END_FADE = 0.3;
+
 interface RecordingVoice {
   source: AudioBufferSourceNode;
   gain: GainNode;
+  /** Audio-clock time this voice goes quiet of its own accord (its end), or Infinity if it plays out. */
+  quietAt: number;
+}
+
+/** Ways to play part of a recording. */
+export interface RecordingOptions {
+  /** Song time before which it must stay silent: whatever falls earlier is skipped over, not delayed. */
+  notBefore?: number;
+  /** Where in the recording, in seconds, it stops (fading out just before), if not at its end. */
+  end?: number;
 }
 
 /**
@@ -47,7 +60,12 @@ export interface Sound {
    * (which raises its pitch with it). It replaces whatever recording was playing: the old one
    * fades out as the new one starts, so each lap of a song can be scheduled on its own.
    */
-  playRecording(url: string, at: number, rate: number): void;
+  playRecording(url: string, at: number, rate: number, options?: RecordingOptions): void;
+  /**
+   * Make everything that has been handed to the audio clock go quiet, the recording and the
+   * ticks not yet played alike, so the song can be scheduled again from where it is.
+   */
+  silence(): void;
   suspend(): void;
   resume(): void;
   playError(): void;
@@ -161,22 +179,25 @@ export class AudioEngine implements Sound {
     this.recordings.delete(url);
   }
 
-  playRecording(url: string, at: number, rate: number): void {
+  playRecording(url: string, at: number, rate: number, options: RecordingOptions = {}): void {
     const { ctx, songBus } = this;
     const buffer = this.decoded.get(url);
     if (!ctx || !songBus || !buffer) return;
 
-    let when = at + this.latency();
-    // Started late (a slow frame): skip the part that should already have played.
-    let from = 0;
-    if (when < ctx.currentTime) {
-      from = (ctx.currentTime - when) * rate;
-      when = ctx.currentTime;
-      if (from >= buffer.duration) return;
-    }
+    // Second 0 of the recording would sound at `start`; from there it is `rate` times faster than the clock.
+    const start = at + this.latency();
+    let when = start;
+    // Started late (a slow frame), or held back until `notBefore`: skip the part that has no time left to play.
+    if (options.notBefore !== undefined) when = Math.max(when, options.notBefore + this.latency());
+    when = Math.max(when, ctx.currentTime);
+    const from = (when - start) * rate;
+    if (from >= buffer.duration) return;
+    const stopAt = options.end === undefined ? Infinity : start + options.end / rate;
+    if (stopAt <= when) return;
 
-    // The lap that was playing gives way to this one. (It cleans itself up once it has ended.)
+    // The lap that was playing gives way to this one. (One that has already been stopped at its end has nothing to give way.)
     for (const old of this.voices) {
+      if (old.quietAt <= when) continue;
       old.gain.gain.setValueAtTime(1, when);
       old.gain.gain.linearRampToValueAtTime(0, when + LAP_FADE);
       old.source.stop(when + LAP_FADE);
@@ -191,8 +212,30 @@ export class AudioEngine implements Sound {
       source.disconnect();
       gain.disconnect();
     };
-    this.voices = [{ source, gain }];
     source.start(when, from);
+    if (stopAt !== Infinity) {
+      // Cut at the end, with a fade so it doesn't click. (A source can only be stopped once started.)
+      const fadeFrom = Math.max(when, stopAt - END_FADE);
+      gain.gain.setValueAtTime(1, fadeFrom);
+      gain.gain.linearRampToValueAtTime(0, stopAt);
+      source.stop(stopAt + 0.02);
+    }
+    this.voices = [{ source, gain, quietAt: stopAt }];
+  }
+
+  silence(): void {
+    const { ctx, master, songBus } = this;
+    if (!ctx || !master || !songBus) return;
+    // Cut straight off, without a fade: this is done while the clock is stopped, so nothing has
+    // been heard since the cut, and it takes hold as soon as the clock runs again.
+    const t = ctx.currentTime;
+    songBus.gain.cancelScheduledValues(t);
+    songBus.gain.setValueAtTime(0, t);
+    for (const voice of this.voices) voice.source.stop(t);
+    this.voices = [];
+    window.setTimeout(() => songBus.disconnect(), 400);
+    this.songBus = ctx.createGain();
+    this.songBus.connect(master);
   }
 
   schedule(event: MusicEvent, at: number, secondsPerRow: number): void {

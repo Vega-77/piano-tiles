@@ -9,9 +9,6 @@ export const TILE_HEIGHT = 25;
  */
 export const BAR_Y = 80;
 
-/** Rows of empty board that scroll past before the first tile reaches the bar. */
-export const LEAD_ROWS = 4;
-
 /**
  * Each time the song finishes, tiles fall (and the music plays) this much faster than at the
  * start: lap 0 = 1x, lap 1 = 1.2x, lap 2 = 1.4x, lap 3 = 1.6x, and so on. The step is added to
@@ -22,7 +19,7 @@ export const LAP_SPEED_STEP = 0.2;
 /**
  * After every lap the board empties for at least this long (seconds, at the new speed) so the
  * player can take in the speed jump, then a count-in of COUNT_IN_BEATS beats leads into the next
- * lap.
+ * lap. The first lap starts with the same count-in, and so does the game after a pause.
  */
 export const LAP_REST_SECONDS = 1.5;
 export const COUNT_IN_BEATS = 4;

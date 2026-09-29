@@ -7,7 +7,6 @@ import {
   GOOD_WINDOW,
   HOLD_TICK_POINTS,
   LANES,
-  LEAD_ROWS,
   NOTE_LOOKAHEAD,
   OK_WINDOW,
   PERFECT_WINDOW,
@@ -70,11 +69,17 @@ const RECORDING_LOOKAHEAD = 1;
 /** Laps of a recording that will ever be scheduled: by lap 30 it is thousands of times too fast to play. */
 const MAX_RECORDED_LAPS = 30;
 
-// A count-in of soft ticks over the lead-in, so the music starts before the first tile arrives.
-// Later laps count in the same way, one tick a beat, after their rest.
+// A count-in of ticks, one a beat, over the lead-in, so the music starts before the first tile
+// arrives. Later laps count in the same way after their rest, and so does a resume after a pause.
 const COUNT_IN_FIRST: readonly MusicEvent[] = [{ kind: 'kick' }, { kind: 'hat' }];
 const COUNT_IN: readonly MusicEvent[] = [{ kind: 'hat', soft: true }];
 const SILENCE: readonly MusicEvent[] = [];
+
+/**
+ * After a pause, seconds before the first count-in tick: the audio clock takes a moment to get
+ * going again, and a tick scheduled into that moment would come late.
+ */
+const RESUME_MARGIN = 0.15;
 
 export function createInitialState(): GameState {
   return {
@@ -140,9 +145,20 @@ export class GameEngine {
   /** Next beat to lay out, counting across laps. */
   private spawnCursor = 0;
   /** Next row to schedule music for: a lap, and a row in it. Negative rows are the count-in and rest. */
-  private musicCursor = { lap: 0, row: -LEAD_ROWS };
+  private musicCursor = { lap: 0, row: 0 };
   /** How many count-in numbers the current lap has shown. */
   private cue = 0;
+  /**
+   * The song clock is the audio clock less `shift`: every count-in after a pause holds the song
+   * still for a while, and the song's time must not run on through it. Standing still, the song
+   * clock reads `frozenAt`, and until `holdUntil` (audio time) that is also what it reads while
+   * the count-in plays.
+   */
+  private shift = 0;
+  private holdUntil = 0;
+  private frozenAt = 0;
+  /** The ticks (audio time) of a count-in after a pause whose numbers are still to show, next first. */
+  private resumeTicks: { at: number; label: string }[] = [];
   /** Next lap of a recorded song to hand to the audio clock. */
   private recordedLap = 0;
   /** Rows scrolled at the last sync. */
@@ -184,18 +200,19 @@ export class GameEngine {
     this.rowsPerLap = row;
     const baseRate = song.speed / TILE_HEIGHT;
     const now = this.audio.now();
+    // The first tile comes after a count-in of its own: four beats, ticked and counted like a lap's.
+    const lead = this.countInRows(song);
 
     this.song = song;
-    this.timeline = new Timeline(
-      baseRate,
-      this.rowsPerLap,
-      now + LEAD_ROWS / baseRate,
-      this.countInRows(song),
-    );
+    this.timeline = new Timeline(baseRate, this.rowsPerLap, now + lead / baseRate, lead);
     this.tiles = [];
     this.spawnCursor = 0;
-    this.musicCursor = { lap: 0, row: -LEAD_ROWS };
+    this.musicCursor = { lap: 0, row: -lead };
     this.cue = 0;
+    this.shift = 0;
+    this.holdUntil = 0;
+    this.frozenAt = 0;
+    this.resumeTicks = [];
     this.recordedLap = 0;
     this.lap = 0;
     this.combo = 0;
@@ -250,13 +267,54 @@ export class GameEngine {
   /** Freeze the song clock (and the music with it). */
   pause(): void {
     if (this.state.status !== 'playing' || this.state.paused) return;
+    // (Paused in the middle of a count-in, the rest of it is given back: it plays in full next time.)
+    this.frozenAt = this.clock();
+    this.holdUntil = 0;
+    this.resumeTicks = [];
     this.audio.suspend();
     this.setState({ paused: true });
   }
 
+  /**
+   * Carry on from where the song stopped, after a count-in: four ticks, one a beat, on the song's
+   * own beat grid, and the last one exactly a beat before the song's next beat, so the music picks
+   * up in time with them. The song stays where it was while they play.
+   *
+   * A pause during a count-in that still has its last tick to come needs no count-in of its own.
+   */
   resume(): void {
     if (!this.state.paused) return;
+    const { song, timeline } = this;
     this.audio.resume();
+    if (!song || !timeline) {
+      this.setState({ paused: false });
+      return;
+    }
+
+    const at = this.frozenAt;
+    const lap = timeline.lapAt(at);
+    const perBeat = song.rowsPerBeat;
+    const beat = perBeat / timeline.rate(lap);
+    // Rows since the lap's first row (before it while the lap is counting in), and the wait for the next beat of the grid they lie on.
+    const into = timeline.rowsAt(at) - timeline.origin(lap);
+    const needsCount = into > -perBeat + 1e-9;
+    const wait = Math.max(0, (Math.ceil(into / perBeat - 1e-9) * perBeat - into) / timeline.rate(lap));
+
+    // Anything handed to the audio clock before the pause is stale: it is scheduled again from here.
+    this.audio.silence();
+    const now = this.audio.now();
+    this.holdUntil = needsCount ? now + RESUME_MARGIN + COUNT_IN_BEATS * beat - wait : now;
+    this.shift = this.holdUntil - at;
+    this.recordedLap = lap;
+    this.musicCursor = this.cursorAt(lap, into);
+    this.resumeTicks = [];
+    if (needsCount) {
+      for (let tick = 0; tick < COUNT_IN_BEATS; tick++) {
+        const when = now + RESUME_MARGIN + tick * beat;
+        for (const event of tick === 0 ? COUNT_IN_FIRST : COUNT_IN) this.audio.schedule(event, when, beat / perBeat);
+        this.resumeTicks.push({ at: when, label: String(COUNT_IN_BEATS - tick) });
+      }
+    }
     this.setState({ paused: false });
   }
 
@@ -273,8 +331,8 @@ export class GameEngine {
    * `key` identifies the pointer so a hold can be released later.
    */
   press(lane: number, key: string): void {
-    if (this.state.status !== 'playing' || this.state.paused) return;
-    const now = this.audio.now();
+    if (this.state.status !== 'playing' || this.state.paused || this.counting()) return;
+    const now = this.clock();
     this.sync(now);
     const pending = this.pendingBeats();
     if (pending.length === 0) return;
@@ -323,20 +381,45 @@ export class GameEngine {
     if (this.state.status !== 'playing' || this.state.paused) return;
     const tile = this.tiles.find((t) => t.hold?.phase === 'holding' && t.hold.pointer === key);
     if (!tile?.hold) return;
-    const now = this.audio.now();
+    const now = this.clock();
     this.payTicks(tile, now);
     this.finishHold(tile, now >= tile.hold.end);
+  }
+
+  /**
+   * The song clock, in seconds: the audio clock less the time spent counting in after pauses. It
+   * stands still while paused, and through a count-in, so nothing on the board moves until the
+   * count is over.
+   */
+  private clock(): number {
+    if (this.state.paused) return this.frozenAt;
+    const audio = this.audio.now();
+    return audio < this.holdUntil ? this.frozenAt : audio - this.shift;
+  }
+
+  /** Whether a count-in after a pause is still playing: the song is held and taps are ignored. */
+  private counting(): boolean {
+    return this.audio.now() < this.holdUntil;
   }
 
   private frame = (): void => {
     if (this.state.status !== 'playing') return;
     if (!this.state.paused) {
-      this.update(this.audio.now());
+      this.showResumeCount();
+      this.update(this.clock());
       if (this.state.status !== 'playing') return;
       this.draw();
     }
     this.rafId = requestAnimationFrame(this.frame);
   };
+
+  /** Put a number of the count-in after a pause on screen as its tick sounds. */
+  private showResumeCount(): void {
+    const audio = this.audio.now();
+    let label: string | undefined;
+    while (this.resumeTicks.length > 0 && audio >= this.resumeTicks[0].at) label = this.resumeTicks.shift()?.label;
+    if (label !== undefined) this.effects.count(label);
+  }
 
   private update(now: number): void {
     this.checkLap(now);
@@ -374,14 +457,21 @@ export class GameEngine {
     if (this.fillAbove()) this.refreshTargets();
   }
 
-  /** Rows of count-in in front of each later lap: a few beats of the song. */
+  /** Rows of count-in in front of the first lap and each later one: a few beats of the song. */
   private countInRows(song: Song): number {
     return COUNT_IN_BEATS * song.rowsPerBeat;
   }
 
   /** Rows the music cursor passes before row 0 of a lap: the lead-in, or a later lap's rest and count-in. */
   private leadRows(lap: number): number {
-    return lap === 0 ? LEAD_ROWS : (this.timeline?.gapRows(lap) ?? 0);
+    if (lap === 0) return this.song ? this.countInRows(this.song) : 0;
+    return this.timeline?.gapRows(lap) ?? 0;
+  }
+
+  /** The first row of the music not yet heard when the song stands `into` rows past row 0 of `lap`. */
+  private cursorAt(lap: number, into: number): { lap: number; row: number } {
+    const row = Math.max(-this.leadRows(lap), Math.ceil(into - 1e-9));
+    return row >= this.rowsPerLap ? { lap: lap + 1, row: -this.leadRows(lap + 1) } : { lap, row };
   }
 
   /**
@@ -406,10 +496,10 @@ export class GameEngine {
     this.setState({ lap, speedMultiplier, progress: 0 });
   }
 
-  /** Put the count-in number on screen as each of the next lap's count-in beats comes due. */
+  /** Put the count-in number on screen as each of a lap's count-in beats comes due (the first lap's too). */
   private showCount(now: number): void {
     const { song, timeline } = this;
-    if (!song || !timeline || this.lap === 0) return;
+    if (!song || !timeline) return;
     const first = -this.countInRows(song);
     let shown = -1;
     while (this.cue < COUNT_IN_BEATS && now >= timeline.arrival(this.lap, first + this.cue * song.rowsPerBeat)) {
@@ -419,9 +509,8 @@ export class GameEngine {
   }
 
   /** What the synth plays on a row: the count-in ticks, nothing through a rest, then the song's own track. */
-  private eventsAt(song: Song, lap: number, row: number): readonly MusicEvent[] {
+  private eventsAt(song: Song, row: number): readonly MusicEvent[] {
     if (row >= 0) return song.track[row];
-    if (lap === 0) return row === -LEAD_ROWS ? COUNT_IN_FIRST : COUNT_IN;
     const into = row + this.countInRows(song);
     if (into < 0 || into % song.rowsPerBeat !== 0) return SILENCE;
     return into === 0 ? COUNT_IN_FIRST : COUNT_IN;
@@ -448,7 +537,7 @@ export class GameEngine {
       if (at > now + NOTE_LOOKAHEAD) return;
 
       const secondsPerRow = 1 / timeline.rate(lap);
-      for (const event of this.eventsAt(song, lap, row)) this.audio.schedule(event, at, secondsPerRow);
+      for (const event of this.eventsAt(song, row)) this.audio.schedule(event, at + this.shift, secondsPerRow);
       this.musicCursor =
         row + 1 >= this.rowsPerLap ? { lap: lap + 1, row: -this.leadRows(lap + 1) } : { lap, row: row + 1 };
     }
@@ -469,7 +558,8 @@ export class GameEngine {
       const speed = timeline.speedFactor(lap);
       const at = timeline.lapStart(lap) - recording.offset / speed;
       if (at > now + RECORDING_LOOKAHEAD) return;
-      this.audio.playRecording(recording.url, at, speed);
+      // (Held back until a count-in after a pause is over; the recording picks up from where it was.)
+      this.audio.playRecording(recording.url, at + this.shift, speed, { notBefore: this.holdUntil, end: recording.end });
       this.recordedLap++;
     }
   }

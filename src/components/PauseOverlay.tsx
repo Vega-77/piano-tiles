@@ -12,7 +12,9 @@ export function PauseOverlay({ onResume, onQuit }: PauseOverlayProps) {
   return (
     <div className="rise-in absolute inset-0 z-30 flex flex-col items-center justify-center gap-6 bg-black/70 px-8 text-center text-white">
       <h2 className="title-gradient text-5xl font-black tracking-tight">Paused</h2>
-      <p className="max-w-[16rem] text-sm text-white/60">The music and the tiles are frozen until you resume.</p>
+      <p className="max-w-[16rem] text-sm text-white/60">
+        The music and the tiles are frozen. Resume with a four-beat count-in, on the tempo of the song.
+      </p>
       <div className="flex w-full flex-col gap-3">
         <button
           ref={resumeRef}

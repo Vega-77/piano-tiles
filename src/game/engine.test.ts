@@ -8,7 +8,6 @@ import {
   HOLD_TICK_POINTS,
   LAP_REST_SECONDS,
   LAP_SPEED_STEP,
-  LEAD_ROWS,
   OK_WINDOW,
   PERFECT_WINDOW,
   POINTS,
@@ -49,6 +48,11 @@ function step(frames = 1): void {
   }
 }
 
+/** Run the clock on in frames until it reaches `time`, so every frame in between gets to see what is due. */
+function runTo(time: number): void {
+  while (songTime < time) step();
+}
+
 beforeEach(() => {
   songTime = 0;
   queue = [];
@@ -82,14 +86,30 @@ function makeSong(beats: BeatSpec[], speed: number, arrangement?: Arrangement, r
 }
 
 interface Scheduled { event: MusicEvent; at: number; secondsPerRow: number }
-interface Played { url: string; at: number; rate: number }
+interface Played { url: string; at: number; rate: number; notBefore?: number; end?: number }
 
-interface SetupOptions { speed?: number; arrangement?: Arrangement; recording?: Recording; effects?: Fx }
+interface SetupOptions {
+  speed?: number;
+  arrangement?: Arrangement;
+  recording?: Recording;
+  effects?: Fx;
+  /**
+   * The board is empty through the count-in, so by default the clock is run on to where the first
+   * tile is coming into view, which is where most tests want to start. `false` stays at the very start.
+   */
+  onBoard?: boolean;
+}
 
-function setup(beats: BeatSpec[], { speed = SPEED, arrangement, recording, effects = noopFx }: SetupOptions = {}) {
+/** Rows before the first tile reaches the bar at which `setup` leaves the clock: three rows above it, in view. */
+const IN_VIEW_ROWS = 3;
+
+function setup(
+  beats: BeatSpec[],
+  { speed = SPEED, arrangement, recording, effects = noopFx, onBoard = true }: SetupOptions = {},
+) {
   const scheduled: Scheduled[] = [];
   const played: Played[] = [];
-  const calls = { started: 0, stopped: 0, suspended: 0, resumed: 0, levelUps: 0, errors: 0 };
+  const calls = { started: 0, stopped: 0, suspended: 0, resumed: 0, silenced: 0, levelUps: 0, errors: 0 };
   const states: GameState[] = [];
   const results: GameOverResult[] = [];
   const audio: Sound = {
@@ -99,7 +119,8 @@ function setup(beats: BeatSpec[], { speed = SPEED, arrangement, recording, effec
     stopSong: () => { calls.stopped++; },
     schedule: (event, at, secondsPerRow) => { scheduled.push({ event, at, secondsPerRow }); },
     load: async () => {},
-    playRecording: (url, at, rate) => { played.push({ url, at, rate }); },
+    playRecording: (url, at, rate, options = {}) => { played.push({ url, at, rate, ...options }); },
+    silence: () => { calls.silenced++; },
     suspend: () => { calls.suspended++; },
     resume: () => { calls.resumed++; },
     playError: () => { calls.errors++; },
@@ -116,10 +137,12 @@ function setup(beats: BeatSpec[], { speed = SPEED, arrangement, recording, effec
   const song = makeSong(beats, speed, arrangement, recording);
   engine.start(song);
   const rate = speed / TILE_HEIGHT; // rows per second on lap 0
-  const t0 = START + LEAD_ROWS / rate;
+  // The first tile comes after a count-in of COUNT_IN_BEATS beats, like every later lap's.
+  const t0 = START + (COUNT_IN_BEATS * song.rowsPerBeat) / rate;
   // The same clock the engine builds, to say when each lap starts and how long its rest is.
   const rows = beats.reduce((sum, beat) => sum + beatRows(beat), 0);
   const timeline = new Timeline(rate, rows, t0, COUNT_IN_BEATS * song.rowsPerBeat);
+  if (onBoard) goTo(t0 - IN_VIEW_ROWS / rate);
   return { engine, song, scheduled, played, calls, states, results, rate, t0, timeline };
 }
 
@@ -193,13 +216,20 @@ describe('judge and comboMultiplier', () => {
 });
 
 describe('the song clock', () => {
-  it('starts with an empty board and a lead-in before the first tile', () => {
-    const { engine, calls, t0 } = setup([tap(), tap()]);
+  it('starts with an empty board and a count-in before the first tile, which then comes in from the top', () => {
+    const { engine, calls, t0, rate } = setup([tap(), tap()], { onBoard: false });
     expect(engine.getState()).toMatchObject({ status: 'playing', score: 0, lap: 0, speedMultiplier: 1 });
     expect(calls.started).toBe(1);
+    expect(engine.getTiles()).toEqual([]);
+
+    goTo(t0 - 5 / rate); // five rows to go: the row above the board has not come up yet
+    expect(engine.getTiles()).toEqual([]);
+    goTo(t0 - 4 / rate);
     const tile = firstTile(engine);
     expect(tile.time).toBeCloseTo(t0, 9);
-    expect(tile.yPos + TILE_HEIGHT).toBeLessThanOrEqual(0); // still above the top of the board
+    expect(tile.yPos + TILE_HEIGHT).toBeLessThanOrEqual(0); // just above the top of the board
+    goTo(t0 - IN_VIEW_ROWS / rate);
+    expect(tile.yPos).toBeCloseTo(BAR_Y + TILE_HEIGHT / 2 - (IN_VIEW_ROWS + 1) * TILE_HEIGHT, 6);
   });
 
   it('puts the middle of each tile on the bar exactly when it is due', () => {
@@ -290,13 +320,15 @@ describe('the music', () => {
 
   const events = (scheduled: Scheduled[], kind: MusicEvent['kind']) => scheduled.filter((s) => s.event.kind === kind);
 
-  it('counts the player in with soft ticks before the first tile arrives', () => {
-    const { scheduled, t0 } = setup(eight(), { arrangement });
+  it('counts the player in on the beat: four ticks, a beat apart, the last a beat before the first tile', () => {
+    const { scheduled, t0, rate, song } = setup(eight(), { arrangement });
     goTo(t0 - 0.4);
-    const early = scheduled.filter((s) => s.at < t0 - 1e-9);
-    expect(early.map((s) => s.event.kind).sort()).toEqual(['hat', 'hat', 'hat', 'hat', 'kick']);
-    expect(early.map((s) => s.at).sort()).toEqual([...early.map((s) => s.at)].sort());
-    expect(Math.min(...early.map((s) => s.at))).toBeCloseTo(START, 9);
+    const beat = song.rowsPerBeat / rate;
+    const early = scheduled.filter((s) => s.at < t0 - 1e-9).sort((a, b) => a.at - b.at);
+    // A kick and a hat to start the count, then a soft hat on each of the next three beats.
+    expect(early.map((s) => s.event.kind)).toEqual(['kick', 'hat', 'hat', 'hat', 'hat']);
+    early.forEach((s, i) => expect(s.at).toBeCloseTo(START + Math.max(0, i - 1) * beat, 9));
+    expect(early[early.length - 1].at).toBeCloseTo(t0 - beat, 9);
   });
 
   it('schedules the drums, bass and chords row by row, in time with the tiles', () => {
@@ -369,7 +401,7 @@ describe('a recorded song', () => {
   it('starts its audio early enough that row 0 of the recording lands on the first tile', () => {
     const { engine, played, t0 } = setup(eight(), { recording });
     goTo(t0 - 1);
-    expect(played).toEqual([{ url: recording.url, at: t0 - 0.13, rate: 1 }]);
+    expect(played).toEqual([{ url: recording.url, at: t0 - 0.13, rate: 1, notBefore: 0 }]);
     expect(engine.getState().status).toBe('playing');
   });
 
@@ -455,7 +487,8 @@ describe('timing judgments', () => {
   });
 
   it('ignores a press before the next tile is even on screen', () => {
-    const { engine } = setup([tap(), tap()]);
+    const { engine, t0, rate } = setup([tap(), tap()], { onBoard: false });
+    goTo(t0 - 4 / rate); // the first tile has been laid out, still above the top of the board
     engine.press(firstTile(engine).lane, 'p1');
     engine.press((firstTile(engine).lane + 1) % 4, 'p1');
     expect(engine.getState()).toMatchObject({ status: 'playing', score: 0 });
@@ -884,11 +917,8 @@ describe('laps: the song ends and everything speeds up', () => {
       const effects: Fx = { ...noopFx, count: (text) => counts.push(text) };
       const { engine, timeline, song } = setup(manyTaps(8), { effects });
       playPerfectly(engine, () => engine.getState().lap >= 1);
-      expect(counts).toEqual([]); // (the first lap has its own lead-in and no numbers)
+      counts.length = 0; // (the first lap's own count-in went by in a jump, and showed only its last number)
       const beat = song.rowsPerBeat / timeline.rate(1);
-      const runTo = (time: number) => {
-        while (songTime < time) step();
-      };
       runTo(timeline.lapStart(1) - COUNT_IN_BEATS * beat - 0.05);
       expect(counts).toEqual([]);
       runTo(timeline.lapStart(1) - COUNT_IN_BEATS * beat + 0.05);
@@ -970,6 +1000,7 @@ describe('progress, pausing and quitting', () => {
     engine.resume();
     expect(engine.getState().paused).toBe(false);
     expect(calls.resumed).toBe(1);
+    expect(calls.silenced).toBe(1); // what was lined up before the pause is dropped; it is scheduled again after the count-in
   });
 
   it('goes back to the menu and silences the song', () => {
@@ -988,6 +1019,217 @@ describe('progress, pausing and quitting', () => {
     songTime = 500;
     engine.start(song);
     expect(engine.getState()).toMatchObject({ status: 'playing', score: 0, combo: 0, lap: 0 });
-    expect(firstTile(engine).time).toBeCloseTo(500 + LEAD_ROWS / rate, 9);
+    const t0 = 500 + (COUNT_IN_BEATS * song.rowsPerBeat) / rate;
+    goTo(t0 - IN_VIEW_ROWS / rate); // (the count-in comes first: the board is empty until the tile nears the top)
+    expect(firstTile(engine).time).toBeCloseTo(t0, 9);
+  });
+});
+
+describe('counting in, on the way in and after a pause', () => {
+  const arrangement: Arrangement = {
+    rowsPerBar: 4,
+    chords: ['C', 'G'],
+    groove: { kick: 'x...', snare: '..x.', hat: 'xoxo', bass: '1...', chord: '.x..', pad: false },
+  };
+  // Row k plays a note of its own (300 + k), so a row's melody note can be picked out by pitch.
+  const notes = () => Array.from({ length: 8 }, (_, i) => tap(300 + i));
+  const kinds = (list: Scheduled[]) => list.map((s) => s.event.kind);
+  const melody = (list: Scheduled[], freq: number) =>
+    list.find((s) => s.event.kind === 'melody' && (s.event as { freq: number }).freq === freq);
+
+  /** At this speed a beat (two rows) is a second, and the first tile is due at `t0`, four beats in. */
+  function counted(options: SetupOptions = {}) {
+    const counts: string[] = [];
+    const effects: Fx = { ...noopFx, count: (text) => counts.push(text) };
+    const made = setup(notes(), { arrangement, effects, ...options });
+    return { ...made, counts };
+  }
+
+  /**
+   * Clear the first three tiles on the bar (rows 0, 1 and 2, due at t0, t0 + 0.5 and t0 + 1), then
+   * pause `after` seconds past row 2. The next tile is row 3, due at t0 + 1.5; the song's next beat
+   * is row 4, at t0 + 2.
+   */
+  function pausedAfterThree(after: number, options: SetupOptions = {}) {
+    const made = counted(options);
+    for (let i = 0; i < 3; i++) tapAt(made.engine, must(nextBeat(made.engine)[0]), 0);
+    goTo(made.t0 + 1 + after);
+    made.engine.pause();
+    made.counts.length = 0;
+    return made;
+  }
+
+  it('counts the first lap in with the numbers 4 3 2 1, one on each beat, the 1 a beat before the first tile', () => {
+    const { t0, rate, song, counts } = counted({ onBoard: false });
+    const beat = song.rowsPerBeat / rate;
+    const shown: { text: string; at: number }[] = [];
+    while (songTime < t0 - 0.01) {
+      step();
+      while (shown.length < counts.length) shown.push({ text: counts[shown.length], at: songTime });
+    }
+    expect(shown.map((s) => s.text)).toEqual(['4', '3', '2', '1']);
+    // Each number appears on its beat (within a frame), and the last one is a beat before the first tile.
+    shown.forEach((s, i) => {
+      expect(s.at - (START + i * beat)).toBeGreaterThanOrEqual(-1e-6);
+      expect(s.at - (START + i * beat)).toBeLessThan(1 / 60 + 1e-6);
+    });
+    expect(t0 - beat - shown[3].at).toBeLessThan(1 / 60 + 1e-6);
+  });
+
+  describe('after a pause', () => {
+    it('plays four ticks, a beat apart, and silences what was scheduled before the pause', () => {
+      const { engine, scheduled, calls, rate, song } = pausedAfterThree(0.1);
+      const beat = song.rowsPerBeat / rate;
+      songTime = 200;
+      const before = scheduled.length;
+      engine.resume();
+      const ticks = scheduled.slice(before);
+
+      expect(calls.silenced).toBe(1);
+      expect(kinds(ticks)).toEqual(['kick', 'hat', 'hat', 'hat', 'hat']);
+      const start = ticks[0].at;
+      expect(start - 200).toBeGreaterThan(0); // (a moment for the audio clock to catch up)
+      expect(start - 200).toBeLessThan(0.5);
+      ticks.forEach((tick, i) => expect(tick.at).toBeCloseTo(start + Math.max(0, i - 1) * beat, 9));
+      for (const tick of ticks) expect(tick.secondsPerRow).toBeCloseTo(1 / rate, 9);
+    });
+
+    it("lands the last tick a beat before the song's next beat, and picks the music up there", () => {
+      const { engine, scheduled, rate, song } = pausedAfterThree(0.1);
+      const beat = song.rowsPerBeat / rate;
+      songTime = 200;
+      const before = scheduled.length;
+      engine.resume();
+      const lastTick = scheduled[scheduled.length - 1].at;
+      runTo(204);
+      const after = scheduled.slice(before);
+
+      expect(melody(after, 304)?.at).toBeCloseTo(lastTick + beat, 9); // row 4, the next beat
+      expect(must(melody(after, 303)).at).toBeGreaterThan(lastTick); // row 3, on the way there
+      expect(melody(after, 302)).toBeUndefined(); // row 2 had already gone by
+      for (const note of after.filter((s) => s.event.kind === 'melody')) expect(note.at).toBeGreaterThan(lastTick);
+    });
+
+    it('waits nothing extra when the pause fell exactly on a beat: that beat is the one after the count', () => {
+      const { engine, scheduled, rate, song } = pausedAfterThree(0);
+      const beat = song.rowsPerBeat / rate;
+      songTime = 200;
+      const before = scheduled.length;
+      engine.resume();
+      const lastTick = scheduled[scheduled.length - 1].at;
+      runTo(203.4); // (the next tile is not due until 0.5s of song after the count, so nothing is missed yet)
+      expect(melody(scheduled.slice(before), 302)?.at).toBeCloseTo(lastTick + beat, 9); // row 2
+    });
+
+    it('holds the song still through the count, ignoring taps, then carries on from the same place on time', () => {
+      const { engine, t0 } = pausedAfterThree(0.1);
+      const tile = must(nextBeat(engine)[0]);
+      const y = tile.yPos;
+      songTime = 200;
+      engine.resume();
+      runTo(203.2); // the count-in is nearly over (the song moves again at 203.25)
+
+      expect(tile.yPos).toBeCloseTo(y, 9);
+      expect(tile.time).toBeCloseTo(t0 + 1.5, 9);
+      const score = engine.getState().score;
+      engine.press(tile.lane, 'p9');
+      engine.press((tile.lane + 1) % 4, 'p8'); // not even a wrong lane counts
+      expect(engine.getState()).toMatchObject({ status: 'playing', score });
+
+      goTo(203.65); // 0.4s of song after the count: row 3 is on the bar
+      expect(centre(tile)).toBeCloseTo(BAR_Y, 6);
+      engine.press(tile.lane, 'p1');
+      expect(engine.getState().score - score).toBeGreaterThanOrEqual(POINTS.perfect);
+    });
+
+    it('shows 4 3 2 1 as each tick sounds, once each', () => {
+      const { engine, counts } = pausedAfterThree(0.1);
+      songTime = 200;
+      engine.resume();
+      runTo(200.1);
+      expect(counts).toEqual([]);
+      runTo(200.3);
+      expect(counts).toEqual(['4']);
+      runTo(201.3);
+      expect(counts).toEqual(['4', '3']);
+      runTo(203.3);
+      expect(counts).toEqual(['4', '3', '2', '1']);
+      runTo(203.5);
+      expect(counts).toEqual(['4', '3', '2', '1']);
+    });
+
+    it('plays the whole count-in again when paused during it, and still lands on the beat', () => {
+      const { engine, counts, scheduled } = pausedAfterThree(0.1);
+      songTime = 200;
+      engine.resume();
+      runTo(201.3);
+      expect(counts).toEqual(['4', '3']);
+      engine.pause();
+      songTime = 300;
+      const before = scheduled.length;
+      engine.resume();
+
+      expect(kinds(scheduled.slice(before))).toEqual(['kick', 'hat', 'hat', 'hat', 'hat']);
+      counts.length = 0;
+      runTo(303.3);
+      expect(counts).toEqual(['4', '3', '2', '1']);
+      const tile = must(nextBeat(engine)[0]);
+      goTo(303.65); // the song had not moved: 0.4s past the count is row 3 again
+      expect(centre(tile)).toBeCloseTo(BAR_Y, 6);
+    });
+
+    it('adds no count-in when paused in the lead-in with its last tick still to come', () => {
+      const { engine, scheduled, t0, counts } = counted({ onBoard: false });
+      runTo(START + 1.5);
+      expect(counts).toEqual(['4', '3']);
+      const frozen = songTime;
+      engine.pause();
+      songTime = 500;
+      const shift = 500 - frozen;
+      const before = scheduled.length;
+      engine.resume();
+      expect(scheduled.length).toBe(before); // nothing extra is played
+
+      runTo(t0 + shift - 0.3);
+      expect(counts).toEqual(['4', '3', '2', '1']);
+      const rest = scheduled.slice(before).filter((s) => s.at < t0 + shift - 1e-9);
+      expect(kinds(rest)).toEqual(['hat', 'hat']); // the two ticks the lead-in had left, on their own beats
+      expect(rest.map((s) => s.at)).toEqual([expect.closeTo(START + 2 + shift, 9), expect.closeTo(START + 3 + shift, 9)]);
+      expect(engine.getState().status).toBe('playing');
+    });
+
+    it("adds no count-in when paused in the rest between laps, and the lap's own count-in carries on", () => {
+      const { engine, scheduled, timeline, counts } = counted();
+      playPerfectly(engine, () => engine.getState().lap >= 1);
+      goTo(timeline.lapEnd(0) + 0.3);
+      counts.length = 0;
+      const frozen = songTime;
+      engine.pause();
+      songTime = 900;
+      const shift = 900 - frozen;
+      const before = scheduled.length;
+      engine.resume();
+      expect(scheduled.length).toBe(before);
+
+      runTo(timeline.lapStart(1) + shift - 0.1);
+      expect(counts).toEqual(['4', '3', '2', '1']);
+      expect(engine.getState().status).toBe('playing');
+    });
+
+    it('hands a recorded song back, held until the count is over, and with its cut', () => {
+      const recording: Recording = { url: 'songs/demo/audio.mp3', offset: 0.13, duration: 4.2, end: 3.5 };
+      const { engine, played, t0 } = pausedAfterThree(0.1, { recording });
+      expect(played).toHaveLength(1);
+      songTime = 200;
+      engine.resume();
+      runTo(200.1);
+
+      expect(played).toHaveLength(2);
+      const again = played[1];
+      expect(again).toMatchObject({ url: recording.url, rate: 1, end: 3.5 });
+      expect(again.notBefore).toBeCloseTo(203.25, 6); // where the song moves again
+      // It is timed so the recording's beat grid lands where the rows will: 0.13s before row 0.
+      expect(again.at).toBeCloseTo(t0 - 0.13 + (203.25 - (t0 + 1.1)), 6);
+    });
   });
 });

@@ -24,10 +24,11 @@ npm run preview  # serve the production build
 
 - **Touch / mouse:** tap in a lane to hit the next tile in that lane. Where you tap in the lane doesn't matter, only when.
 - **Keyboard:** `D` `F` `J` `K` are lanes 1–4. `Esc` pauses.
-- The board scrolls in over a short count-in before the first tile arrives, and every later lap starts with a break and another count-in (see below).
+- The board is empty through a four-beat count-in (a big 4-3-2-1, with a tick on each beat) before the first tile arrives, and every later lap starts with a break and another count-in (see below).
 - Tiles come in rhythm, so there are **gaps**: rows with nothing to tap. Wait through them.
 - Tap a lane with no tile in it, leave a tile too long, or tap one far too early, and it's over.
 - The game pauses itself if you switch tabs.
+- **Resuming counts you back in.** After a pause, the music and tiles stay frozen until a four-beat 4-3-2-1 has played out at the tempo you were playing at, ticking on the beat. Taps are ignored while it counts. Pausing again mid-count starts the count over.
 
 ### The timing bar
 
@@ -48,20 +49,22 @@ Each perfect extends your **chain**; anything less resets it to zero. Every 8 pe
 
 ### The music
 
-The song is the original recording. It plays continuously, on the audio clock, and **never reacts to your taps**, so when you tap has no effect on what you hear. Tiles arrive at the bar on the beats the analyser found, and the music keeps going through the gaps. A count-in of four beats, with a big 4-3-2-1 on screen, comes before the first tile.
+The song is the original recording. It plays continuously, on the audio clock, and **never reacts to your taps**, so when you tap has no effect on what you hear. Tiles arrive at the bar on the beats the analyser found, and the music keeps going through the gaps. A count-in of four beats, with a big 4-3-2-1 on screen and a tick on every beat, comes before the first tile. The first tile lands on the beat right after the "1": the analyser puts the first row of a song on a beat, so the count-in and the music share one pulse.
 
 ### Laps and speed
 
 Every song opens at a brisk tempo of its own. Each time the song finishes a lap, the tiles **and the tempo** speed up by another 0.2× of the *first* lap's speed: 1.0×, 1.2×, 1.4×, 1.6×, 1.8×, and so on. It is added, not compounded, so lap *n* runs at `1 + LAP_SPEED_STEP × n` (`LAP_SPEED_STEP` is in `src/config.ts`).
 
-**A break before every jump.** The last tiles of a lap scroll away, then there is a short rest (`LAP_REST_SECONDS`, 1.5 s at the new speed), then four beats of count-in at the *new* tempo, so you hear the speed you are about to play at before the first tile arrives. The new lap's banner and speed show at the start of the break, and nothing can be missed during it.
+**A break before every jump.** The last tiles of a lap scroll away, then there is a short rest (`LAP_REST_SECONDS`, 1.5 s at the new speed), then four beats of count-in at the *new* tempo (each beat is one beat of the song at its new speed, so the count keeps time with the music you're about to play), so you hear the speed you are about to play at before the first tile arrives. The new lap's banner and speed show at the start of the break, and nothing can be missed during it.
+
+**A lap is 60–90 seconds.** A song longer than that is stopped at a chosen point each lap, with the music fading out, and starts again from the top (see [Length](#tune-this-song)). A song that already fits plays whole.
 
 ### Tile types
 
 | Tile | What to do |
 | --- | --- |
 | **Tap** | Tap it as it lines up with the bar. |
-| **Double** | Two tiles in the same row, exactly one lane apart (lanes 1 & 3, or 2 & 4), joined by a glowing bar. Tap both, in either order; each is graded on its own. |
+| **Double** | Two tiles in the same row, exactly one lane apart (lanes 1 & 3, or 2 & 4), joined by a glowing bar. Tap both, in either order; each is graded on its own. Common at every level: up to about one tile in eight on Easy, one in five on Medium and more than one in four on Hard. |
 | **Hold** (gold, 2–4 rows tall) | Press as its head lines up with the bar (graded like a tap) and keep holding. It pays out a tick every half row for as long as you hold, worth more the longer it is. **Letting go early never ends the game**: you just stop earning ticks. Tapping the next tile also lets go of the hold. |
 
 Best score, best chain and most laps are saved per song in `localStorage`.
@@ -73,7 +76,7 @@ The game has no songs of its own: you add them. Drop in an mp4 (or mp3, m4a, wav
 It all happens **in the browser, on the device you are holding**. There is nothing to install and no command to run, so it works the same on the published site, on a phone, or on a computer you have never used before:
 
 1. Drop the file anywhere on the song list, or tap **Add your own song** and choose it. The listening takes a few seconds for a typical song (a progress bar shows how far along it is, with a Cancel button).
-2. The new song appears in the list, charted at Medium. Play it. If it doesn't feel right, tap **Tune** on the "Added" message, or **Tune this song** under the song's card (below).
+2. The new song appears in the list, charted at Medium and about 70–80 seconds long. Play it. If it doesn't feel right, tap **Tune** on the "Added" message, or **Tune this song** under the song's card (below).
 
 The file never leaves the device: it isn't uploaded anywhere, and it isn't added to this repository.
 
@@ -89,7 +92,11 @@ Clearing a site's data removes its songs, and a private window forgets them when
 
 The analyser finds the tempo and where the first beat falls, then puts the tiles on a fixed grid from there. It looks for sudden jumps in the sound (it doesn't tell instruments apart) and puts a tile on the strongest hits that fall on the grid, keeping a gap between tiles and leaving rests where the music is quiet.
 
-The tiles are spread with a **quota per stretch of music**: every eight beats gets a share of the tiles (about 60% of what the difficulty allows, taken from that stretch's own strongest hits), and only what is left over goes to the loudest hits anywhere. That is what keeps a quiet verse from being emptied out by a loud chorus, while a truly silent stretch (a break, a fade) still gets none. A chorus still ends up busier than a verse, because it has more strong hits to choose from. Hits that land on the beat are slightly preferred. A hit followed by sustained sound with nothing struck over it becomes a hold, and the hardest hits, where the low, middle and high of the sound all land together, can become doubles. It does not transcribe the melody, so the tiles follow the *rhythm* rather than the notes.
+The tiles are spread with a **quota per stretch of music**: every eight beats gets a share of the tiles (about 60% of what the difficulty allows, taken from that stretch's own strongest hits), and only what is left over goes to the loudest hits anywhere. That is what keeps a quiet verse from being emptied out by a loud chorus, while a truly silent stretch (a break, a fade) still gets none. A chorus still ends up busier than a verse, because it has more strong hits to choose from. Hits that land on the beat are slightly preferred. A hit followed by sustained sound with nothing struck over it becomes a hold. Doubles go on the hardest hits, where the low, middle and high of the sound all land together, and they are handed out through the song a stretch at a time (the same eight-beat stretches as the quota), so they turn up in every part of it rather than only in the loudest. They are capped at 12 % of the tiles on Easy, 20 % on Medium and 28 % on Hard, and never fall on two rows in a row. It does not transcribe the melody, so the tiles follow the *rhythm* rather than the notes.
+
+The first row is placed on a beat, not wherever the recording happens to begin, so the count-in ticks and the lap's first tile share the song's pulse.
+
+**Where a long song stops.** The analyser only ever lays out one lap. If the song is longer than the top of the chosen length (Short 60–70 s, Medium 70–80 s, Long 80–90 s), it looks at every bar line inside that range and picks the best place to stop. A bar line scores for ending a phrase (the end of eight bars beats four, four beats two, two beats one) and for falling in a quiet moment in the music, and the **later** bar line wins a tie, for more of the song. If not one bar line falls in the range (a very slow tempo), it stops at the top of the range. A song at or under the top plays whole. The audio file itself is kept whole, so re-charting at another length never needs it again, and the lap fades out at the stop.
 
 That works best on music with a steady beat: pop, rock, electronic, hip-hop. Music that speeds up and slows down (live playing, classical rubato) can't sit on a fixed grid, and the analyser says so with a warning on the song.
 
@@ -101,7 +108,8 @@ Every added song has a **Tune** screen of its own, opened with **Tune this song*
 | --- | --- |
 | **Sync** slider (±250 ms) + **Save** | The tiles reach the bar a little before or after the beat you hear. Bluetooth speakers and headphones add delay of their own, so this is often the first thing to try. |
 | **Tempo** | The tiles drift away from the music, or the detected tempo is half or double the real one. Type the right BPM, then **Re-chart**. **Find the tempo again** goes back to automatic. |
-| **Easy / Medium / Hard** + **Re-chart** | There are too many or too few tiles. Easy leaves a free row between tiles; Medium and Hard allow tiles in neighbouring rows, with Hard the fullest (and the most doubles). **Re-chart** is always available, so you can also use it to lay the tiles out again with the latest analyser without changing anything else. A song keeps the tiles it has until you re-chart it, so songs added before the levels moved up one keep their old tiles until then. |
+| **Easy / Medium / Hard** + **Re-chart** | There are too many or too few tiles. Easy leaves a free row between tiles and has doubles now and then; Medium and Hard allow tiles in neighbouring rows, with Hard the fullest and the most doubles. **Re-chart** is always available, so you can also use it to lay the tiles out again with the latest analyser without changing anything else. A song keeps the tiles it has until you re-chart it, so songs added before the levels moved up one, or before doubles, lengths and the beat-aligned start, keep their old tiles until then. |
+| **Short / Medium / Long** + **Re-chart** | The lap is too short or too long. Each is a range (60–70 s, 70–80 s, 80–90 s); a longer song is stopped at the best bar line inside it (see [Where a long song stops](#how-the-tiles-are-placed)). The screen says where this song would stop. Songs added before lengths existed play in full until re-charted. |
 | **Name** + **Save** | To rename it. |
 | **Save song file** | To take the song to another device, or keep a backup. |
 | **Remove song…** | To take it out of this device (asks first). |
@@ -110,7 +118,7 @@ Changes are saved on this device straight away.
 
 ### Notes
 
-- Up to 300 MB per file and about ten minutes of music. Only one song is worked on at a time.
+- Up to 300 MB per file and about ten minutes of music (that is what gets listened to; a lap is then cut to 60–90 s as above). Only one song is worked on at a time.
 - A small mp3, m4a, aac or wav is kept as it came. A video, or anything else the browser might not play back, is stored as just its sound (a WAV, so a long video takes more room than the mp4 did).
 - The browser has to be able to decode the file. mp3, m4a/mp4 and wav work everywhere; ogg, flac, webm and mov depend on the browser, and the game says so if it can't read one.
 - Only add music you have the right to use. Nothing is uploaded or published, but songs you add are yours to answer for.
@@ -123,7 +131,8 @@ The 60fps loop lives outside React so per-frame movement never triggers a render
 - Each frame the engine reads the clock and places every tile from it, so a tile's position is a pure function of time.
 - The recording plays on that same clock (its playback rate steps up with each lap), so tiles and audio can't drift apart.
 - A tap is graded only by `tap time − the time its tile was centred on the bar`.
-- Pausing suspends the audio clock, which freezes tiles and music together.
+- Pausing suspends the audio clock, which freezes tiles and music together. Resuming holds the song still on the engine's own clock while a four-beat count-in is ticked out on the beat grid, then lets it run from exactly where it stopped, with the recording re-scheduled to join at the right point.
+- A lap that is cut short tells the audio where to stop (`end`); the recording fades out there and the next lap starts it again.
 
 | File | Role |
 | --- | --- |
@@ -134,7 +143,7 @@ The 60fps loop lives outside React so per-frame movement never triggers a render
 | `src/game/audio.ts` | Web Audio: plays a song's recording at each lap's speed. It also has a small synth (lead, drums, bass, chords) for a song that has notes instead of a recording, which the tests use |
 | `src/game/storage.ts` | Per-song best score, chain and laps |
 | `src/songs/` | Note-notation parser and the arrangement builder (used by the synth path and the tests), and `songs.ts`, the numbers the screens show about a song |
-| `src/songs/analysis/` | The in-browser analyser for added songs: spectral onsets, tempo and beat grid, tile placement (`analyze.ts` and friends), run in a worker (`analyzer.worker.ts`, `client.ts`) |
+| `src/songs/analysis/` | The in-browser analyser for added songs: spectral onsets, tempo and beat grid, tile placement (`analyze.ts` and friends), where a long song stops (`length.ts`), run in a worker (`analyzer.worker.ts`, `client.ts`) |
 | `src/songs/` (added songs) | `decode.ts` reads a file's audio, `importer.ts` adds / re-charts / tunes / removes a song, `store.ts` keeps songs in IndexedDB, `bundle.ts` is the `.pianotiles` song file, `chart.ts` and `library.ts` turn stored charts into playable songs |
 | `src/components/` | The screens and overlays: song list (`SongSelect`, `ImportPanel`, `JobStatus`), the separate `TuneScreen`, the HUD, pause and game over |
 | `src/hooks/useGame.ts` | Bridges the engine to React; state updates only on start, each score, each lap, pause and game over |

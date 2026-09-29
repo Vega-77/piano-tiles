@@ -148,13 +148,32 @@ describe('making a song from a chart', () => {
   });
 
   it('keeps what the tuning panel needs to start from', () => {
-    expect(songFromChart(chartFile(), folder).imported).toEqual({ nudge: 0, manualBpm: false, level: 'medium', confidence: undefined, warnings: [] });
+    expect(songFromChart(chartFile(), folder).imported).toEqual({
+      nudge: 0,
+      manualBpm: false,
+      level: 'medium',
+      length: 'medium',
+      confidence: undefined,
+      warnings: [],
+    });
 
-    const analysis = { confidence: 0.8, drift: 0.01, manualBpm: true, peakRate: 3, tiles: 5, rows: 100, density: 0.3, level: 'hard', warnings: ['Very fast.'] };
+    const analysis = {
+      confidence: 0.8,
+      drift: 0.01,
+      manualBpm: true,
+      peakRate: 3,
+      tiles: 5,
+      rows: 100,
+      density: 0.3,
+      level: 'hard',
+      length: 'long',
+      warnings: ['Very fast.'],
+    };
     expect(songFromChart(chartFile({ analysis, nudge: -0.03 }), folder).imported).toEqual({
       nudge: -0.03,
       manualBpm: true,
       level: 'hard',
+      length: 'long',
       confidence: 0.8,
       warnings: ['Very fast.'],
     });
@@ -163,6 +182,56 @@ describe('making a song from a chart', () => {
     expect(songFromChart(chartFile({ analysis: { ...analysis, level: 'insane' } }), folder).imported?.level).toBe('medium');
     // Charts saved before the levels moved up a step called what is now Easy "normal".
     expect(songFromChart(chartFile({ analysis: { ...analysis, level: 'normal' } }), folder).imported?.level).toBe('easy');
+    // The same goes for a length the app doesn't know, and for charts saved before there were lengths.
+    expect(songFromChart(chartFile({ analysis: { ...analysis, length: 'endless' } }), folder).imported?.length).toBe('medium');
+  });
+});
+
+describe('a song cut short', () => {
+  const folder = 'https://example.test/songs/demo/';
+  const rowsOf = (song: Song) => song.beats.reduce((sum, beat) => sum + beatRows(beat), 0);
+
+  it('counts only the rows before the cut', () => {
+    // 30 s of audio, but the lap stops at 20 s: (20 - 0.1) / 0.25 = 79.6 rows, rounded up.
+    expect(chartRows(chartFile({ end: 20 }))).toBe(80);
+    expect(chartRows(chartFile())).toBe(120);
+  });
+
+  it('does not add a row when the cut is on the last row line, give or take rounding', () => {
+    // 0.1 + 80 rows of 0.25 s = 20.1 s, written down as 20.1 or as 20.099.
+    expect(chartRows(chartFile({ end: 20.1 }))).toBe(80);
+    expect(chartRows(chartFile({ end: 20.099 }))).toBe(80);
+  });
+
+  it('is kept when it is sound, and left out when there is none', () => {
+    expect(validateChart(chartFile({ end: 20 })).end).toBe(20);
+    expect('end' in validateChart(chartFile())).toBe(false);
+  });
+
+  it.each([
+    ['past the end of the audio', { end: 31 }],
+    ['before the first row', { end: 5, offset: 6 }],
+    ['not a number', { end: 'soon' }],
+    ['too short to play', { end: 2 }],
+  ])('refuses a cut that is %s', (_name, patch) => {
+    expect(() => validateChart({ ...chartFile(), ...patch })).toThrow(/end/);
+  });
+
+  it('lets the audio finish where the cut is, and pads the tiles up to it', () => {
+    const song = songFromChart(chartFile({ end: 20 }), folder);
+    expect(song.recording).toEqual({ url: `${folder}audio-1a2b3c4d.mp3`, offset: 0.1, duration: 30, end: 20 });
+    expect(rowsOf(song)).toBe(80);
+    expect(song.beats[song.beats.length - 1].type).toBe('rest');
+  });
+
+  it('plays a song without a cut in full, and gives its recording no end', () => {
+    const song = songFromChart(chartFile(), folder);
+    expect('end' in song.recording!).toBe(false);
+  });
+
+  it('refuses tiles that run on past the cut', () => {
+    expect(() => songFromChart(chartFile({ end: 20, chart: 'x .80' }), folder)).not.toThrow(); // 81 rows: one over is allowed
+    expect(() => songFromChart(chartFile({ end: 20, chart: 'x .81' }), folder)).toThrow(/room for 80/);
   });
 });
 

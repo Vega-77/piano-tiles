@@ -1,5 +1,6 @@
 import { fingerprintOf, type AnalyzeOptions } from './analysis/analyze';
 import { analyzeSamples, type Analyser } from './analysis/client';
+import { DEFAULT_LENGTH, lengthFrom, type Length } from './analysis/length';
 import { DEFAULT_DENSITY, densityFrom, type Density } from './analysis/tiles';
 import { isSongFile, packSong, songFileName, unpackSong } from './bundle';
 import { MAX_NUDGE, validateChart, type ChartFile } from './chart';
@@ -13,6 +14,7 @@ import { MISSING_AUDIO, getSongStore, keepSongs, type SongStore } from './store'
  * are saved here (store.ts). Nothing is uploaded, and nothing needs installing.
  */
 
+export { LENGTHS, LENGTH_SECONDS, type Length } from './analysis/length';
 export { DENSITIES, type Density } from './analysis/tiles';
 export { Cancelled, ImportError } from './errors';
 export { MAX_UPLOAD_MB } from './decode';
@@ -34,12 +36,15 @@ export interface ImportOptions {
   /** The tempo, when it is known: the analyser only looks for it if this is left out. */
   bpm?: number;
   density?: Density;
+  /** How long a lap may be: a longer song is stopped at a bar line in this range. */
+  length?: Length;
 }
 
 export interface RechartOptions {
   title?: string;
   bpm?: number;
   density?: Density;
+  length?: Length;
   /** Forget a tempo that was given by hand and detect it again. */
   auto?: boolean;
 }
@@ -170,7 +175,7 @@ export async function addSong(file: File, options: ImportOptions = {}, job: Job 
   const store = await tools.store();
   const { samples, fingerprint, audio } = await prepare(file, job, tools, 0.3);
 
-  const analyzeOptions: AnalyzeOptions = { density: options.density ?? DEFAULT_DENSITY, bpm: options.bpm };
+  const analyzeOptions: AnalyzeOptions = { density: options.density ?? DEFAULT_DENSITY, length: options.length ?? DEFAULT_LENGTH, bpm: options.bpm };
   const measured = await tools.analyse(samples, analyzeOptions, (progress) => stage(progress.message, 0.3 + 0.62 * (progress.fraction ?? 0)), job.signal);
   notCancelled(job);
 
@@ -209,7 +214,11 @@ export async function rechartSong(id: string, options: RechartOptions = {}, job:
     onStep: (step) => stage(step.message, 0.3 * step.fraction),
   });
   const keepsHandTempo = old.analysis?.manualBpm === true && !options.auto;
-  const analyzeOptions: AnalyzeOptions = { density: options.density ?? levelOf(old), bpm: options.bpm ?? (keepsHandTempo ? old.bpm : undefined) };
+  const analyzeOptions: AnalyzeOptions = {
+    density: options.density ?? levelOf(old),
+    length: options.length ?? lengthFrom(old.analysis?.length),
+    bpm: options.bpm ?? (keepsHandTempo ? old.bpm : undefined),
+  };
   const measured = await tools.analyse(samples, analyzeOptions, (progress) => stage(progress.message, 0.3 + 0.65 * (progress.fraction ?? 0)), job.signal);
   notCancelled(job);
 

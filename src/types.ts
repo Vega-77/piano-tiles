@@ -110,10 +110,12 @@ export type Difficulty = 1 | 2 | 3 | 4 | 5;
 export interface Recording {
   /** Where to fetch the audio from. */
   url: string;
-  /** Seconds into the audio at which row 0 falls. About one row long or less, and negative if the audio should start late. */
+  /** Seconds into the audio at which row 0 falls (the first beat: under a beat), and negative if the audio should start late. */
   offset: number;
   /** Length of the audio in seconds. */
   duration: number;
+  /** Where in the audio a lap stops (seconds), if the song is longer than a lap may be. Missing: play to the end. */
+  end?: number;
 }
 
 /** What a song made from a recording remembers about how it was charted, for the tuning panel. */
@@ -124,6 +126,8 @@ export interface ImportInfo {
   manualBpm: boolean;
   /** How busy the chart was asked to be. */
   level: 'easy' | 'medium' | 'hard';
+  /** How long a lap was allowed to be. */
+  length: 'short' | 'medium' | 'long';
   /** 0–1: how well the detected beats fit the grid, when the analyser said. */
   confidence?: number;
   warnings: readonly string[];

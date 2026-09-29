@@ -25,8 +25,12 @@ interface Heard {
   options: Parameters<Analyser>[1];
 }
 
-/** Tools with nothing real behind them: sound is a sine wave, and "analysing" answers straight away. */
-function setup(seconds = 10) {
+/**
+ * Tools with nothing real behind them: sound is a sine wave, and "analysing" answers straight away.
+ * `cut` is where the fake analyser says a lap stops (like the real one, it always names the key,
+ * and leaves it undefined for a song it plays whole).
+ */
+function setup(seconds = 10, cut?: number) {
   const store = createMemoryStore();
   const heard: Heard[] = [];
   const analyse: Analyser = async (samples, options, onProgress) => {
@@ -38,6 +42,7 @@ function setup(seconds = 10) {
       rowsPerBeat: 2,
       offset: 0.1,
       duration: seconds,
+      end: cut,
       difficulty: 3,
       chart: 'x . x . xx',
       analysis: {
@@ -49,6 +54,7 @@ function setup(seconds = 10) {
         rows: 20,
         density: 0.15,
         level: options.density,
+        length: options.length,
         warnings: [],
       },
     };
@@ -104,15 +110,28 @@ describe('adding a song from a recording', () => {
     expect(audio!.type).toBe('audio/mpeg');
     expect(heard).toHaveLength(1);
     expect(heard[0].samples).toBe(10 * 22050);
-    expect(heard[0].options).toEqual({ density: 'medium', bpm: undefined });
+    expect(heard[0].options).toEqual({ density: 'medium', length: 'medium', bpm: undefined });
+    expect('end' in chart).toBe(false); // (this song is short enough to play whole)
   });
 
-  it('uses the name, artist, tempo and busyness it was given', async () => {
+  it('uses the name, artist, tempo, busyness and length it was given', async () => {
     const { heard, tools } = setup();
-    const chart = await addSong(fakeFile(500, 'x.mp3'), { title: '  Mine  ', artist: ' Me ', bpm: 128, density: 'hard' }, {}, tools);
+    const chart = await addSong(
+      fakeFile(500, 'x.mp3'),
+      { title: '  Mine  ', artist: ' Me ', bpm: 128, density: 'hard', length: 'long' },
+      {},
+      tools,
+    );
     expect(chart).toMatchObject({ id: 'mine', title: 'Mine', artist: 'Me', bpm: 128 });
-    expect(chart.analysis).toMatchObject({ manualBpm: true, level: 'hard' });
-    expect(heard[0].options).toEqual({ density: 'hard', bpm: 128 });
+    expect(chart.analysis).toMatchObject({ manualBpm: true, level: 'hard', length: 'long' });
+    expect(heard[0].options).toEqual({ density: 'hard', length: 'long', bpm: 128 });
+  });
+
+  it('saves where a long song was cut, and the whole length of its audio', async () => {
+    const { store, tools } = setup(200, 76.1);
+    const chart = await addSong(fakeFile(500, 'long.mp3'), {}, {}, tools);
+    expect(chart).toMatchObject({ duration: 200, end: 76.1 });
+    expect(await saved(store, chart.id)).toMatchObject({ duration: 200, end: 76.1 });
   });
 
   it('gives the same recording the same colours and audio name every time', async () => {
@@ -211,7 +230,7 @@ describe('changing a saved song', () => {
     await tuneSong(chart.id, { title: 'Renamed', nudgeMs: 40 }, {}, tools);
     const again = await rechartSong(chart.id, { bpm: 90, density: 'easy' }, {}, tools);
 
-    expect(heard[0].options).toEqual({ density: 'easy', bpm: 90 });
+    expect(heard[0].options).toEqual({ density: 'easy', length: 'medium', bpm: 90 });
     expect(again).toMatchObject({ id: chart.id, title: 'Renamed', hue: chart.hue, hue2: chart.hue2, audio: chart.audio, nudge: 0.04, bpm: 90 });
     expect(await saved(store, chart.id)).toEqual(again);
     expect((await store.audio(chart.id))!.size).toBe(500);
@@ -220,7 +239,7 @@ describe('changing a saved song', () => {
   it('remembers a tempo given by hand, unless told to detect it again', async () => {
     const { heard, tools, chart } = await withSong();
     await rechartSong(chart.id, { density: 'hard' }, {}, tools);
-    expect(heard[0].options).toEqual({ density: 'hard', bpm: 100 });
+    expect(heard[0].options).toEqual({ density: 'hard', length: 'medium', bpm: 100 });
     await rechartSong(chart.id, { auto: true }, {}, tools);
     expect(heard[1].options.bpm).toBeUndefined();
   });
@@ -230,6 +249,40 @@ describe('changing a saved song', () => {
     await rechartSong(chart.id, { density: 'easy' }, {}, tools);
     await rechartSong(chart.id, {}, {}, tools);
     expect(heard[1].options.density).toBe('easy');
+  });
+
+  it('keeps the length it had unless asked for another', async () => {
+    const { heard, tools, chart } = await withSong();
+    await rechartSong(chart.id, { length: 'short' }, {}, tools);
+    await rechartSong(chart.id, {}, {}, tools);
+    await rechartSong(chart.id, { length: 'long' }, {}, tools);
+    expect(heard.map((entry) => entry.options.length)).toEqual(['short', 'short', 'long']);
+  });
+
+  it('reads a song saved before there were lengths as a medium one', async () => {
+    const { store, heard, tools, chart } = await withSong();
+    const { length: _length, ...analysis } = (await saved(store, chart.id)).analysis!;
+    await store.save({ ...(await saved(store, chart.id)), analysis });
+    await rechartSong(chart.id, {}, {}, tools);
+    expect(heard[0].options.length).toBe('medium');
+  });
+
+  it('puts the cut where the new analysis says, and drops an old one when there is none', async () => {
+    const context = setup(200, 76.1);
+    const chart = await addSong(fakeFile(500, 'long.mp3'), { bpm: 100 }, {}, context.tools);
+    expect(chart.end).toBe(76.1);
+
+    // The same song, charted again as a short one: a new cut.
+    const cutAgain = setup(200, 61.3);
+    await cutAgain.store.save(chart, await context.store.audio(chart.id) ?? undefined);
+    expect((await rechartSong(chart.id, { length: 'short' }, {}, cutAgain.tools)).end).toBe(61.3);
+
+    // ...and charted again where it fits whole: the old cut must not stay behind.
+    const whole = setup(200);
+    await whole.store.save(chart, await context.store.audio(chart.id) ?? undefined);
+    const wholeAgain = await rechartSong(chart.id, { length: 'long' }, {}, whole.tools);
+    expect(wholeAgain.end).toBeUndefined();
+    expect((await saved(whole.store, chart.id)).end).toBeUndefined();
   });
 
   it('says so when the song or its audio is gone', async () => {
