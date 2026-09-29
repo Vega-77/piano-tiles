@@ -83,17 +83,20 @@ body {
 
   /* Cleared: flash, then fade to a ghost. */
   .tile[data-state='hit'] .tile-face,
-  .tile[data-state='done'] .tile-face {
+  .tile[data-state='done'] .tile-face,
+  .tile[data-state='released'] .tile-face {
     transform: scale(0.92);
     opacity: 0.15;
     filter: saturate(0.1) brightness(1.1);
     animation: tile-hit 0.4s ease-out;
   }
-  .tile[data-state='done'] .tile-fill {
+  .tile[data-state='done'] .tile-fill,
+  .tile[data-state='released'] .tile-fill {
     opacity: 0.35;
   }
   .tile[data-state='hit'] .tile-shine,
-  .tile[data-state='done'] .tile-shine {
+  .tile[data-state='done'] .tile-shine,
+  .tile[data-state='released'] .tile-shine {
     animation: none;
   }
 
@@ -119,7 +122,8 @@ body {
     animation: link-flow 1.4s ease-in-out infinite alternate;
   }
   .tile[data-state='hit'] .tile-link,
-  .tile[data-state='done'] .tile-link {
+  .tile[data-state='done'] .tile-link,
+  .tile[data-state='released'] .tile-link {
     opacity: 0.15;
     animation: none;
   }

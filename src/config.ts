@@ -4,10 +4,10 @@ export const LANES = 4;
 export const TILE_HEIGHT = 25;
 
 /**
- * The timing bar: where a tile's leading (bottom) edge should be at the moment it is
- * tapped, as a percentage of board height.
+ * The timing bar, as a percentage of board height. It marks where the *centre* of a tile
+ * (the centre of its lowest row, for a hold tile) should be at the moment it is tapped.
  */
-export const BAR_Y = 86;
+export const BAR_Y = 80;
 
 /** Rows of empty board that scroll past before the first tile reaches the bar. */
 export const LEAD_ROWS = 4;
@@ -18,24 +18,28 @@ export const LEAD_ROWS = 4;
  */
 export const LAP_SPEED_FACTOR = 1.3;
 
-// Timing windows: seconds either side of the moment a tile reaches the bar.
-export const PERFECT_WINDOW = 0.08;
-export const GOOD_WINDOW = 0.16;
-/** A tile that is still untapped this long after reaching the bar is missed. */
-export const MISS_AFTER = 0.32;
+// Timing windows: seconds either side of the moment a tile is centred on the bar.
+export const PERFECT_WINDOW = 0.075;
+export const GOOD_WINDOW = 0.15;
+/**
+ * The furthest a tap may be from the bar and still count. Tap earlier than this and the tile
+ * doesn't line up with the bar: the game ends. Leave a tile later than this and it's missed.
+ */
+export const OK_WINDOW = 0.25;
 
 /** Base points per tile for each judgment, before the chain multiplier. */
 export const POINTS = { perfect: 100, good: 60, ok: 25 } as const;
-/** Extra base points for holding a hold tile all the way to its end. */
-export const HOLD_BONUS = 50;
+
+/**
+ * A hold tile pays out in ticks, one every half row for as long as it is held. Letting go
+ * early just stops the ticks; it never ends the game.
+ */
+export const HOLD_TICK_POINTS = 10;
 
 /** Every COMBO_STEP perfects in a row raises the points multiplier by one... */
 export const COMBO_STEP = 8;
 /** ...up to this cap. */
 export const COMBO_MAX_MULTIPLIER = 8;
-
-/** How early (seconds) a hold may be let go before its end without failing. */
-export const HOLD_RELEASE_TOLERANCE = 0.15;
 
 /** A repeat press on a lane cleared this recently is ignored rather than punished. */
 export const DOUBLE_TAP_GUARD = 0.12;

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { GAME_OVER_REVEAL_MS } from '../config';
-import type { GameOverResult } from '../game/engine';
+import type { FailReason, GameOverResult } from '../game/engine';
 import { DIFFICULTY_LABELS } from '../songs/songs';
 import type { Song } from '../types';
 
@@ -31,6 +31,12 @@ function Stat({ label, value, tone }: { label: string; value: number; tone?: str
     </div>
   );
 }
+
+const REASONS: Record<FailReason, string> = {
+  miss: 'You missed a tile',
+  early: 'You tapped too early: the tile was nowhere near the bar',
+  wrong: 'You tapped a lane with no tile in it',
+};
 
 interface GameOverOverlayProps {
   song: Song;
@@ -70,6 +76,7 @@ export function GameOverOverlay({ song, score, best, result, onRestart, onMenu }
           {song.title}
         </p>
         <p className="text-xs text-white/45">{DIFFICULTY_LABELS[song.difficulty]}</p>
+        {result && <p className="mx-auto mt-2 max-w-[17rem] text-xs text-rose-300/90">{REASONS[result.reason]}</p>}
       </div>
 
       <p className="title-gradient text-7xl font-black tabular-nums leading-none">{shownScore.toLocaleString()}</p>

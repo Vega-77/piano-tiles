@@ -1,6 +1,7 @@
 import type { CSSProperties } from 'react';
 import type { SongStats, StatsMap } from '../game/storage';
-import { DIFFICULTY_LABELS, songBpm, songFeatures, songRows, songSeconds } from '../songs/songs';
+import { beatRows } from '../songs/notation';
+import { DIFFICULTY_LABELS, songBars, songFeatures, songSeconds } from '../songs/songs';
 import type { Song } from '../types';
 
 const themeOf = (song: Song) => ({ '--hue': song.hue, '--hue2': song.hue2 }) as CSSProperties;
@@ -17,12 +18,12 @@ function SongCover({ song }: { song: Song }) {
   let bottom = rowsShown;
   for (let i = 0; i < song.beats.length && bottom > 0; i++) {
     const beat = song.beats[i];
-    const rows = beat.type === 'hold' ? beat.rows : 1;
+    const rows = beatRows(beat);
     const top = bottom - rows;
     if (beat.type === 'double') {
       const lanes = i % 2 ? [1, 3] : [0, 2];
       for (const lane of lanes) cells.push({ key: `${i}-${lane}`, lane, top, rows: 1, hold: false });
-    } else {
+    } else if (beat.type !== 'rest') {
       cells.push({ key: String(i), lane: (i * 3 + 1) % 4, top, rows, hold: beat.type === 'hold' });
     }
     bottom = top;
@@ -129,7 +130,7 @@ function SongCard({ song, index, stats, selected, onSelect }: SongCardProps) {
         </div>
 
         <p className="mt-1 text-[0.7rem] tabular-nums text-white/60">
-          {songBpm(song)} BPM · {songRows(song)} rows · {formatDuration(songSeconds(song))}
+          {song.bpm} BPM · {songBars(song)} bars · {formatDuration(songSeconds(song))}
         </p>
 
         {(features.doubles || features.holds) && (

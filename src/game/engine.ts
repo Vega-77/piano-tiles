@@ -4,18 +4,17 @@ import {
   COMBO_STEP,
   DOUBLE_TAP_GUARD,
   GOOD_WINDOW,
-  HOLD_BONUS,
-  HOLD_RELEASE_TOLERANCE,
+  HOLD_TICK_POINTS,
   LANES,
   LEAD_ROWS,
-  MISS_AFTER,
   NOTE_LOOKAHEAD,
+  OK_WINDOW,
   PERFECT_WINDOW,
   POINTS,
   TILE_HEIGHT,
 } from '../config';
-import { songRows } from '../songs/songs';
-import type { GameState, Judgment, Song, Tile } from '../types';
+import { beatRows } from '../songs/notation';
+import type { GameState, Judgment, MusicEvent, Song, Tile } from '../types';
 import type { Sound } from './audio';
 import type { BarZone, Fx } from './effects';
 import { TileRenderer } from './renderer';
@@ -31,10 +30,14 @@ export interface RunStats {
   laps: number;
 }
 
+/** Why a run ended. */
+export type FailReason = 'miss' | 'early' | 'wrong';
+
 export interface GameOverResult {
   score: number;
   isNewBest: boolean;
   songId: string;
+  reason: FailReason;
   stats: RunStats;
 }
 
@@ -50,13 +53,17 @@ interface EngineOptions {
 
 type Failure =
   | { kind: 'miss'; tiles: Tile[] }
-  | { kind: 'released'; tile: Tile }
+  | { kind: 'early'; tile: Tile }
   | { kind: 'wrong'; lane: number; rowY: number };
 
 const JUDGMENT_LABEL: Record<Judgment, string> = { perfect: 'PERFECT', good: 'GOOD', ok: 'OK' };
 
-/** Upper bound on notes handed to the audio clock in a single frame. */
-const MAX_NOTES_PER_FRAME = 256;
+/** Upper bound on rows of music handed to the audio clock in a single frame. */
+const MAX_ROWS_PER_FRAME = 256;
+
+// A count-in of soft ticks over the lead-in, so the music starts before the first tile arrives.
+const COUNT_IN_FIRST: readonly MusicEvent[] = [{ kind: 'kick' }, { kind: 'hat' }];
+const COUNT_IN: readonly MusicEvent[] = [{ kind: 'hat', soft: true }];
 
 export function createInitialState(): GameState {
   return {
@@ -78,26 +85,31 @@ export function comboMultiplier(combo: number): number {
   return Math.min(COMBO_MAX_MULTIPLIER, 1 + Math.floor(combo / COMBO_STEP));
 }
 
-/** Grade a tap by how far (seconds) it was from the moment the tile reached the bar. Negative = early. */
-export function judge(delta: number): { judgment: Judgment; early: boolean } {
+/**
+ * Grade a tap by how far (seconds) it was from the moment its tile was centred on the bar.
+ * Negative = early. Further away than the OK window there is no grade: the tap doesn't line up.
+ */
+export function judge(delta: number): { judgment: Judgment | null; early: boolean } {
   const distance = Math.abs(delta);
-  const judgment = distance <= PERFECT_WINDOW ? 'perfect' : distance <= GOOD_WINDOW ? 'good' : 'ok';
+  const judgment =
+    distance <= PERFECT_WINDOW ? 'perfect' : distance <= GOOD_WINDOW ? 'good' : distance <= OK_WINDOW ? 'ok' : null;
   return { judgment, early: delta < 0 };
 }
 
 const laneCenter = (lane: number): number => (lane + 0.5) * (100 / LANES);
-/** Top edge of a tile's lowest row: the "head" that hold tiles are grabbed by. */
-const headTop = (tile: Tile): number => tile.yPos + (tile.rows - 1) * TILE_HEIGHT;
 const bottomEdge = (tile: Tile): number => tile.yPos + tile.rows * TILE_HEIGHT;
+/** The middle of a tile's lowest row: the part that lines up with the bar. */
+const headCenter = (tile: Tile): number => bottomEdge(tile) - TILE_HEIGHT / 2;
 
 /**
  * The game loop and rules, kept outside React.
  *
- * One clock rules everything: the audio clock. A `Timeline` says when each beat of the song
- * reaches the timing bar; tiles are drawn wherever that puts them, and the music is scheduled
- * ahead of time for the same moments. So the tiles are always on the beat, the song plays on
- * its own whether or not you tap, and a tap is graded purely by how close it landed to the
- * moment its tile reached the bar. Finishing the song speeds the whole thing up.
+ * One clock rules everything: the audio clock. A `Timeline` says when each row of the song
+ * reaches the timing bar; tiles are drawn wherever that puts them, and the whole backing track
+ * (melody, drums, bass, chords) is scheduled ahead of time for the same moments. So the tiles are
+ * always on the beat, the song plays on its own whether or not you tap, and a tap is graded purely
+ * by how close it landed to the moment its tile was centred on the bar. Finishing the song
+ * speeds the whole thing up.
  */
 export class GameEngine {
   private readonly renderer: TileRenderer;
@@ -114,9 +126,11 @@ export class GameEngine {
   /** Lowest (oldest) beat first, so top edges only ever decrease along the array. */
   private tiles: Tile[] = [];
   private nextId = 0;
-  /** Next beat to lay out / to schedule music for, counting across laps. */
+  /** Next beat to lay out, counting across laps, and the row where the last one ended. */
   private spawnCursor = 0;
-  private noteCursor = 0;
+  private spawnedEnd = 0;
+  /** Next row to schedule music for, counting across laps. Negative rows are the count-in. */
+  private rowCursor = -LEAD_ROWS;
   /** Rows scrolled at the last sync. */
   private scroll = 0;
   private lap = 0;
@@ -150,10 +164,10 @@ export class GameEngine {
     let row = 0;
     this.beatStarts = song.beats.map((beat) => {
       const start = row;
-      row += beat.type === 'hold' ? beat.rows : 1;
+      row += beatRows(beat);
       return start;
     });
-    this.rowsPerLap = songRows(song);
+    this.rowsPerLap = row;
     const baseRate = song.speed / TILE_HEIGHT;
     const now = this.audio.now();
 
@@ -161,7 +175,8 @@ export class GameEngine {
     this.timeline = new Timeline(baseRate, this.rowsPerLap, now + LEAD_ROWS / baseRate);
     this.tiles = [];
     this.spawnCursor = 0;
-    this.noteCursor = 0;
+    this.spawnedEnd = 0;
+    this.rowCursor = -LEAD_ROWS;
     this.lap = 0;
     this.combo = 0;
     this.stats = { perfect: 0, good: 0, ok: 0, maxChain: 0, tiles: 0, laps: 0 };
@@ -170,7 +185,7 @@ export class GameEngine {
     this.effects.setTheme(song.hue, song.hue2);
     this.effects.setEnergy(0);
     this.effects.setBar(this.barZone());
-    this.effects.banner('Get ready', 'Tap each tile as it reaches the bar');
+    this.effects.banner('Get ready', 'Tap each tile as it lines up with the bar');
 
     this.sync(now);
     this.fillAbove();
@@ -233,17 +248,34 @@ export class GameEngine {
 
   /**
    * A finger (or key) went down in `lane`. It goes to the tile in that lane belonging to the
-   * next beat, and is graded by how close it is to the moment that tile reaches the bar.
+   * next beat, and is graded by how close it is to the moment that tile is centred on the bar.
+   * Tap so early (or so late) that the tile doesn't line up with the bar, and the game is over.
    * `key` identifies the pointer so a hold can be released later.
    */
   press(lane: number, key: string): void {
     if (this.state.status !== 'playing' || this.state.paused) return;
     const now = this.audio.now();
     this.sync(now);
-    const beat = this.targetBeat();
-    if (beat < 0) return;
+    const pending = this.pendingBeats();
+    if (pending.length === 0) return;
 
-    const group = this.tiles.filter((t) => t.beat === beat);
+    let group = this.tilesOfBeat(pending[0]);
+    // A hold that is still being held doesn't block what comes next: tapping the next tile
+    // lets go of the hold (keeping the points it has earned) and counts as that tile's tap.
+    // That only applies once the next tile is actually due; a press any earlier than that is
+    // not "moving on", so it falls through and is treated like any other press.
+    if (pending.length > 1 && group.every((t) => t.hold?.phase === 'holding')) {
+      const next = this.tilesOfBeat(pending[1]);
+      const due = now >= next[0].time - OK_WINDOW;
+      if (due && next.some((t) => t.lane === lane) && next.some((t) => this.reachable(t))) {
+        for (const held of group) {
+          this.payTicks(held, now);
+          this.finishHold(held, false);
+        }
+        group = next;
+      }
+    }
+
     // The next tile isn't on screen yet, so there's nothing to aim at: ignore the press.
     if (!group.some((t) => this.reachable(t))) return;
 
@@ -252,19 +284,28 @@ export class GameEngine {
       // A stray repeat on a lane cleared a moment ago isn't fatal; anything else is a blank tap.
       const last = this.lastCleared;
       if (last && last.lane === lane && now - last.time < DOUBLE_TAP_GUARD) return;
-      this.endGame({ kind: 'wrong', lane, rowY: headTop(group[0]) });
+      this.endGame({ kind: 'wrong', lane, rowY: group[0].yPos + (group[0].rows - 1) * TILE_HEIGHT });
       return;
     }
-    if (this.isPressable(tile)) this.hit(tile, key, now);
+    if (!this.isPressable(tile)) return;
+
+    const delta = now - tile.time;
+    const { judgment, early } = judge(delta);
+    if (!judgment) {
+      this.endGame(delta < 0 ? { kind: 'early', tile } : { kind: 'miss', tiles: [tile] });
+      return;
+    }
+    this.hit(tile, key, now, judgment, early);
   }
 
-  /** A finger (or key) came up. Letting go of a hold tile too early ends the game. */
+  /** A finger (or key) came up. Letting go of a hold tile just stops it paying out. */
   release(key: string): void {
     if (this.state.status !== 'playing' || this.state.paused) return;
     const tile = this.tiles.find((t) => t.hold?.phase === 'holding' && t.hold.pointer === key);
     if (!tile?.hold) return;
-    if (this.audio.now() >= tile.hold.end - HOLD_RELEASE_TOLERANCE) this.completeHold(tile);
-    else this.endGame({ kind: 'released', tile });
+    const now = this.audio.now();
+    this.payTicks(tile, now);
+    this.finishHold(tile, now >= tile.hold.end);
   }
 
   private frame = (): void => {
@@ -279,14 +320,15 @@ export class GameEngine {
 
   private update(now: number): void {
     this.checkLap(now);
-    this.scheduleNotes(now);
+    this.scheduleMusic(now);
     this.sync(now);
 
     for (const tile of this.tiles) {
       const hold = tile.hold;
       if (hold?.phase !== 'holding') continue;
-      if (now >= hold.end - HOLD_RELEASE_TOLERANCE) {
-        this.completeHold(tile);
+      this.payTicks(tile, now);
+      if (now >= hold.end) {
+        this.finishHold(tile, true);
       } else {
         this.renderer.setHoldProgress(tile.id, this.holdProgress(tile));
         this.effects.stream(laneCenter(tile.lane), BAR_Y);
@@ -296,7 +338,7 @@ export class GameEngine {
     // A beat is missed once its tiles are too late to tap and still untouched.
     const beat = this.targetBeat();
     const missed = this.tiles.filter(
-      (t) => t.beat === beat && !t.isHit && t.hold?.phase !== 'holding' && now - t.time > MISS_AFTER,
+      (t) => t.beat === beat && !t.isHit && t.hold?.phase !== 'holding' && now - t.time > OK_WINDOW,
     );
     if (missed.length > 0) {
       this.endGame({ kind: 'miss', tiles: missed });
@@ -328,27 +370,31 @@ export class GameEngine {
     this.setState({ lap, speedMultiplier });
   }
 
-  /** Hand the music for upcoming beats to the audio clock a little ahead of time. */
-  private scheduleNotes(now: number): void {
+  /**
+   * Hand the backing track to the audio clock a little ahead of time, one row at a time: the
+   * count-in first, then every row of every lap, drums and bass and chords included.
+   */
+  private scheduleMusic(now: number): void {
     const { song, timeline } = this;
     if (!song || !timeline) return;
-    // Tempo grows geometrically, so the arrival times of *all* future laps converge on a finite
+    // Tempo grows geometrically, so the times of *all* future laps converge on a finite
     // moment. The cap keeps a huge clock jump from spinning here forever.
-    for (let scheduled = 0; scheduled < MAX_NOTES_PER_FRAME; scheduled++) {
-      const { lap, index } = this.locate(this.noteCursor);
-      const spec = song.beats[index];
-      const at = timeline.arrival(lap, this.beatStarts[index]);
+    for (let rows = 0; rows < MAX_ROWS_PER_FRAME; rows++) {
+      const row = this.rowCursor;
+      const counting = row < 0;
+      const lap = counting ? 0 : Math.floor(row / this.rowsPerLap);
+      const inLap = counting ? row : row % this.rowsPerLap;
+      const at = timeline.arrival(lap, inLap);
       if (at > now + NOTE_LOOKAHEAD) return;
 
-      const hold = spec.type === 'hold' ? spec.rows / timeline.rate(lap) : undefined;
-      const freqs = spec.type === 'double' ? spec.freqs : [spec.freq];
-      for (const freq of freqs) this.audio.schedule(freq, at, hold === undefined ? undefined : { hold });
-      this.noteCursor++;
+      const events = counting ? (row === -LEAD_ROWS ? COUNT_IN_FIRST : COUNT_IN) : song.track[inLap];
+      const secondsPerRow = 1 / timeline.rate(lap);
+      for (const event of events) this.audio.schedule(event, at, secondsPerRow);
+      this.rowCursor++;
     }
   }
 
-  private hit(tile: Tile, key: string, now: number): void {
-    const { judgment, early } = judge(now - tile.time);
+  private hit(tile: Tile, key: string, now: number, judgment: Judgment, early: boolean): void {
     const multiplier = comboMultiplier(this.combo);
     const points = POINTS[judgment] * multiplier;
 
@@ -362,15 +408,19 @@ export class GameEngine {
       tile.isHit = true;
       this.renderer.markHit(tile.id);
     } else if (tile.hold) {
-      tile.hold.phase = 'holding';
-      tile.hold.pointer = key;
+      const hold = tile.hold;
+      hold.phase = 'holding';
+      hold.pointer = key;
+      // Ticks that went by before the tile was grabbed are gone: a late grab earns less.
+      const spacing = (hold.end - tile.time) / hold.totalTicks;
+      hold.ticks = Math.max(0, Math.min(hold.totalTicks, Math.floor((now - tile.time) / spacing)));
       this.renderer.markHolding(tile.id);
     }
 
     const x = laneCenter(tile.lane);
-    this.effects.hit(x, bottomEdge(tile) - TILE_HEIGHT / 2, tile.lane, judgment);
+    this.effects.hit(x, headCenter(tile), tile.lane, judgment);
     const direction = judgment === 'perfect' ? '' : ` ${early ? 'EARLY' : 'LATE'}`;
-    this.effects.popup(JUDGMENT_LABEL[judgment], x, BAR_Y - 12, { sub: `+${points}${direction}`, judgment });
+    this.effects.popup(JUDGMENT_LABEL[judgment], x, BAR_Y - 14, { sub: `+${points}${direction}`, judgment });
     if (comboMultiplier(this.combo) > multiplier) {
       this.effects.popup(`×${comboMultiplier(this.combo)}`, 50, 46, { sub: 'CHAIN', judgment: 'perfect' });
       this.effects.setEnergy(this.energy());
@@ -378,19 +428,44 @@ export class GameEngine {
     this.award(points);
   }
 
-  private completeHold(tile: Tile): void {
+  /** Pay out every tick of a held tile that has come due by `now`. */
+  private payTicks(tile: Tile, now: number): void {
+    const hold = tile.hold;
+    if (hold?.phase !== 'holding') return;
+    const spacing = (hold.end - tile.time) / hold.totalTicks;
+    while (hold.ticks < hold.totalTicks && now >= tile.time + (hold.ticks + 1) * spacing) {
+      hold.ticks++;
+      const points = HOLD_TICK_POINTS * comboMultiplier(this.combo);
+      hold.earned += points;
+      this.award(points);
+    }
+  }
+
+  /**
+   * A hold tile is over: it ran to its end (`natural`) or the player let go early. Either way the
+   * player keeps what it paid out so far; letting go just forfeits the rest.
+   */
+  private finishHold(tile: Tile, natural: boolean): void {
     const hold = tile.hold;
     if (hold?.phase !== 'holding') return;
     hold.phase = 'done';
     hold.pointer = null;
     tile.isHit = true;
-    this.renderer.markDone(tile.id);
 
-    const bonus = HOLD_BONUS * comboMultiplier(this.combo);
     const x = laneCenter(tile.lane);
-    this.effects.hit(x, BAR_Y, tile.lane, 'perfect');
-    this.effects.popup('HOLD', x, BAR_Y - 12, { sub: `+${bonus}`, judgment: 'perfect' });
-    this.award(bonus);
+    if (natural) {
+      this.renderer.markDone(tile.id);
+      this.effects.hit(x, BAR_Y, tile.lane, 'perfect');
+    } else {
+      this.renderer.markReleased(tile.id);
+    }
+    if (hold.earned > 0) {
+      this.effects.popup(natural ? 'HOLD' : 'LET GO', x, BAR_Y - 14, {
+        sub: `+${hold.earned}`,
+        judgment: natural ? 'perfect' : 'ok',
+      });
+    }
+    this.award(0);
   }
 
   private award(points: number): void {
@@ -411,16 +486,17 @@ export class GameEngine {
     let x = 50;
     let y = BAR_Y;
     if (failure.kind === 'miss') {
-      // Slide the board back so the missed tiles sit on the bar, and light them up red.
-      const shift = Math.max(0, bottomEdge(failure.tiles[0]) - BAR_Y);
+      // Slide the board back so the missed tiles are centred on the bar, and light them up red.
+      const shift = Math.max(0, headCenter(failure.tiles[0]) - BAR_Y);
       for (const tile of this.tiles) tile.yPos -= shift;
       for (const tile of failure.tiles) this.renderer.markMiss(tile.id);
       this.renderer.enableSettling();
       this.draw();
       x = laneCenter(failure.tiles[0].lane);
-    } else if (failure.kind === 'released') {
+    } else if (failure.kind === 'early') {
       this.renderer.markMiss(failure.tile.id);
       x = laneCenter(failure.tile.lane);
+      y = headCenter(failure.tile);
     } else {
       this.renderer.showError(failure.lane, failure.rowY);
       x = laneCenter(failure.lane);
@@ -432,7 +508,18 @@ export class GameEngine {
     const { score, songId } = this.state;
     const { stats, isNewBest } = recordRun(songId, { score, maxChain: this.stats.maxChain, laps: this.lap });
     this.setState({ status: 'gameover', highScore: stats.best, combo: 0, comboMultiplier: 1 });
-    this.onGameOver?.({ score, isNewBest, songId, stats: { ...this.stats, laps: this.lap } });
+    this.onGameOver?.({ score, isNewBest, songId, reason: failure.kind, stats: { ...this.stats, laps: this.lap } });
+  }
+
+  /** Beats that still have an uncleared tile, lowest first. */
+  private pendingBeats(): number[] {
+    const beats = new Set<number>();
+    for (const tile of this.tiles) if (!tile.isHit) beats.add(tile.beat);
+    return [...beats].sort((a, b) => a - b);
+  }
+
+  private tilesOfBeat(beat: number): Tile[] {
+    return this.tiles.filter((t) => t.beat === beat);
   }
 
   /** The lowest beat that still has an uncleared tile, or -1. */
@@ -446,7 +533,7 @@ export class GameEngine {
 
   /** Whether a tile's head is far enough on screen to be a fair target. */
   private reachable(tile: Tile): boolean {
-    return bottomEdge(tile) - TILE_HEIGHT / 2 > 0;
+    return headCenter(tile) > 0;
   }
 
   private refreshTargets(): void {
@@ -476,14 +563,14 @@ export class GameEngine {
     return { y: BAR_Y, perfect: Math.min(20, PERFECT_WINDOW * speed), good: Math.min(30, GOOD_WINDOW * speed) };
   }
 
-  private locate(beat: number): { lap: number; index: number } {
-    const count = this.song?.beats.length ?? 1;
-    return { lap: Math.floor(beat / count), index: beat % count };
+  /** Y (percent of board height) of the bottom edge of row `row`, for the current scroll position. */
+  private edgeY(row: number): number {
+    return BAR_Y + TILE_HEIGHT / 2 - (row - this.scroll) * TILE_HEIGHT;
   }
 
   /** Top edge of a tile for the current scroll position. */
   private tileTop(tile: Tile): number {
-    return BAR_Y - (tile.start - this.scroll) * TILE_HEIGHT - tile.rows * TILE_HEIGHT;
+    return this.edgeY(tile.start) - tile.rows * TILE_HEIGHT;
   }
 
   /** Place every tile for song time `now`. */
@@ -493,38 +580,43 @@ export class GameEngine {
     for (const tile of this.tiles) tile.yPos = this.tileTop(tile);
   }
 
-  /** Lay out beats until the board is covered plus one row above the top. Returns whether any spawned. */
+  /** Lay out beats until the board is covered plus one row above the top. Returns whether any tile spawned. */
   private fillAbove(): boolean {
     let spawned = false;
-    for (;;) {
-      const last = this.tiles[this.tiles.length - 1];
-      if (last && last.yPos <= -TILE_HEIGHT) return spawned;
-      this.spawnBeat(this.spawnCursor++);
-      spawned = true;
+    while (this.edgeY(this.spawnedEnd) > -TILE_HEIGHT) {
+      if (this.spawnBeat(this.spawnCursor++)) spawned = true;
     }
+    return spawned;
   }
 
-  private spawnBeat(beat: number): void {
+  /** Lay out one beat. Gaps take up rows but have no tile. Returns whether it made any tiles. */
+  private spawnBeat(beat: number): boolean {
     const { song, timeline } = this;
-    if (!song || !timeline) return;
-    const { lap, index } = this.locate(beat);
+    if (!song || !timeline) return false;
+    const count = song.beats.length;
+    const lap = Math.floor(beat / count);
+    const index = beat % count;
     const spec = song.beats[index];
     const row = this.beatStarts[index];
     const start = lap * this.rowsPerLap + row;
     const time = timeline.arrival(lap, row);
+    this.spawnedEnd = start + beatRows(spec);
 
+    if (spec.type === 'rest') return false;
     if (spec.type === 'double') {
       // Exactly one lane between the two tiles: lanes 0 & 2, or 1 & 3.
       const lanes = Math.random() < 0.5 ? [0, 2] : [1, 3];
       lanes.forEach((lane, i) =>
         this.addTile({ beat, lane, rows: 1, kind: 'tap', freq: spec.freqs[i], start, time, end: time }, i === 0),
       );
-      return;
+      return true;
     }
     const rows = spec.type === 'hold' ? spec.rows : 1;
-    const end = time + (rows > 1 ? rows / timeline.rate(lap) : 0);
+    // A hold is complete when its far end reaches the bar: half a row less than its length.
+    const end = time + (rows - 0.5) / timeline.rate(lap);
     const lane = Math.floor(Math.random() * LANES);
     this.addTile({ beat, lane, rows, kind: spec.type, freq: spec.freq, start, time, end });
+    return true;
   }
 
   private addTile(
@@ -542,7 +634,10 @@ export class GameEngine {
       freq: spec.freq,
       start: spec.start,
       time: spec.time,
-      hold: spec.kind === 'hold' ? { phase: 'pending', pointer: null, end: spec.end } : null,
+      hold:
+        spec.kind === 'hold'
+          ? { phase: 'pending', pointer: null, end: spec.end, totalTicks: spec.rows * 2 - 1, ticks: 0, earned: 0 }
+          : null,
     };
     tile.yPos = this.tileTop(tile);
     this.tiles.push(tile);

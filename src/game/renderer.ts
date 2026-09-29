@@ -99,6 +99,11 @@ export class TileRenderer {
     this.setState(id, 'done');
   }
 
+  /** A hold tile the player let go of before its end: it keeps the fill it earned but fades out. */
+  markReleased(id: string): void {
+    this.setState(id, 'released');
+  }
+
   markMiss(id: string): void {
     this.setState(id, 'miss');
   }
