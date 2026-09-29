@@ -8,8 +8,6 @@ import {
   rechartSong,
   removeSong,
   tuneSong,
-  type Density,
-  type ImportOptions,
   type Job,
   type RechartOptions,
   type TuneOptions,
@@ -21,15 +19,6 @@ export interface Working {
   stage: string;
   fraction: number;
 }
-
-/** The choices for the next song to be added (kept here so a file dropped anywhere on the menu uses them). */
-export interface ImportChoices {
-  title: string;
-  bpm: string;
-  density: Density;
-}
-
-const DEFAULT_CHOICES: ImportChoices = { title: '', bpm: '', density: 'normal' };
 
 /** Hands a song file to the browser to save, the way a download link does. */
 function saveToDevice(blob: Blob, filename: string) {
@@ -51,7 +40,6 @@ export function useImporter(refresh: () => Promise<void>) {
   const [working, setWorking] = useState<Working | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [added, setAdded] = useState<ChartFile | null>(null);
-  const [choices, setChoices] = useState<ImportChoices>(DEFAULT_CHOICES);
   const running = useRef<AbortController | null>(null);
 
   const run = useCallback(
@@ -81,27 +69,27 @@ export function useImporter(refresh: () => Promise<void>) {
     [refresh],
   );
 
-  /** Adds a song file, using the current choices. Resolves with its chart, or undefined if it failed or was cancelled. */
+  /**
+   * Adds a song file, charted the usual way: the name from the file, the tempo found from the music,
+   * a normal number of tiles. Anything else is a matter of tuning it afterwards. Resolves with its
+   * chart, or undefined if it failed or was cancelled.
+   */
   const add = useCallback(
     async (file: File): Promise<ChartFile | undefined> => {
-      const options: ImportOptions = { title: choices.title, density: choices.density };
-      const bpm = Number(choices.bpm);
-      if (choices.bpm.trim() !== '' && Number.isFinite(bpm)) options.bpm = bpm;
       setAdded(null);
-      const chart = await run(`Adding ${file.name}`, (job) => addSong(file, options, job));
-      if (chart) {
-        setAdded(chart);
-        setChoices((old) => ({ ...old, title: '', bpm: '' })); // (the density carries over)
-      }
+      const chart = await run(`Adding ${file.name}`, (job) => addSong(file, {}, job));
+      if (chart) setAdded(chart);
       return chart;
     },
-    [choices, run],
+    [run],
   );
 
+  /** Works the tiles out again; resolves with the new chart, or undefined if it failed or was cancelled. */
   const rechart = useCallback(
     (id: string, options: RechartOptions) => run('Re-charting', (job) => rechartSong(id, options, job)),
     [run],
   );
+  /** Saves a new name or sync; resolves with the song as saved, or undefined if that failed. */
   const tune = useCallback((id: string, options: TuneOptions) => run('Saving', (job) => tuneSong(id, options, job)), [run]);
   const remove = useCallback(
     async (id: string) => {
@@ -130,5 +118,5 @@ export function useImporter(refresh: () => Promise<void>) {
     setAdded(null);
   }, []);
 
-  return { working, error, added, choices, setChoices, add, rechart, tune, remove, save, cancel, dismiss };
+  return { working, error, added, add, rechart, tune, remove, save, cancel, dismiss };
 }

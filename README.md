@@ -22,7 +22,7 @@ npm run preview  # serve the production build
 
 - **Touch / mouse:** tap in a lane to hit the next tile in that lane. Where you tap in the lane doesn't matter, only when.
 - **Keyboard:** `D` `F` `J` `K` are lanes 1–4. `Esc` pauses.
-- The board scrolls in over a short count-in before the first tile arrives.
+- The board scrolls in over a short count-in before the first tile arrives, and every later lap starts with a break and another count-in (see below).
 - Tiles come in rhythm, so there are **gaps**: rows with nothing to tap. Wait through them.
 - Tap a lane with no tile in it, leave a tile too long, or tap one far too early, and it's over.
 - The game pauses itself if you switch tabs.
@@ -46,11 +46,13 @@ Each perfect extends your **chain**; anything less resets it to zero. Every 8 pe
 
 ### The music
 
-Each song is a whole arrangement: a lead melody, kick, snare and hi-hats, a bass line and chords. It plays continuously on its own, scheduled on the audio clock, and **never reacts to your taps**, so when you tap has no effect on what you hear. Tiles arrive at the bar exactly on the melody's beats, and the drums and bass keep going through the gaps. A few soft ticks count you in.
+Each song is a whole arrangement: a lead melody, kick, snare and hi-hats, a bass line and chords. It plays continuously on its own, scheduled on the audio clock, and **never reacts to your taps**, so when you tap has no effect on what you hear. Tiles arrive at the bar exactly on the melody's beats, and the drums and bass keep going through the gaps. Four soft ticks, one a beat apart, count you in, with a big 4-3-2-1 on screen.
 
 ### Laps and speed
 
-Every song opens at a brisk tempo of its own. Each time the song finishes a lap, the tiles **and the tempo** jump to 1.3× the previous lap's speed: 1.0×, 1.3×, 1.69×, 2.2×, 2.86×, and so on. The multiplier is `LAP_SPEED_FACTOR ** lap` in `src/config.ts`.
+Every song opens at a brisk tempo of its own. Each time the song finishes a lap, the tiles **and the tempo** jump to 1.2× the previous lap's speed: 1.0×, 1.2×, 1.44×, 1.73×, 2.07×, and so on. The multiplier is `LAP_SPEED_FACTOR ** lap` in `src/config.ts`.
+
+**A break before every jump.** The last tiles of a lap scroll away, then there is a short rest (`LAP_REST_SECONDS`, 1.5 s at the new speed), then four beats of count-in at the *new* tempo, so you hear the speed you are about to play at before the first tile arrives. The new lap's banner and speed show at the start of the break, and nothing can be missed during it.
 
 ### Tile types
 
@@ -87,41 +89,45 @@ Every song also gives one chord per bar (two joined with `/` to change halfway) 
 
 ## Adding songs
 
-Drop in an mp4 (or mp3, m4a, wav, ogg, flac, mov, webm, anything with an audio track) and the tiles are laid out on its beat. The original recording plays instead of the built-in synth, and each lap it plays 1.3× faster along with the tiles (the pitch rises with it).
+Drop in an mp4 (or mp3, m4a, wav, ogg, flac, mov, webm, anything with an audio track) and the tiles are laid out on its beat. The original recording plays instead of the built-in synth, and each lap it plays 1.2× faster along with the tiles (the pitch rises with it).
 
 It all happens **in the browser, on the device you are holding**. There is nothing to install and no command to run, so it works the same on the published site, on a phone, or on a computer you have never used before:
 
-1. Drop the file anywhere on the song list, or tap **Add a song** and choose it. The listening takes a few seconds for a typical song (a progress bar shows how far along it is, with a Cancel button).
-2. The new song appears in the list. Play it. If it doesn't feel right, open **Tune this song** on its card (below).
+1. Drop the file anywhere on the song list, or tap **Add your own song** and choose it. The listening takes a few seconds for a typical song (a progress bar shows how far along it is, with a Cancel button).
+2. The new song appears in the list, charted at Normal. Play it. If it doesn't feel right, tap **Tune** on the "Added" message, or **Tune this song** under the song's card (below).
 
 The file never leaves the device: it isn't uploaded anywhere, and it isn't added to this repository.
 
-**Options for the next song** (under the drop zone): a name (otherwise it comes from the file name), a tempo if you know it, and how many tiles (Easy, Normal, Busy).
+The song list is only for picking. Everything technical (name, sync, tempo, how many tiles) lives on the separate **Tune** screen.
 
 ### Where songs are kept
 
-A song (its chart and its audio) is saved in that browser's own storage (IndexedDB), so it is still there next time, but **only on that device and in that browser**. To play it somewhere else, open **Tune this song → Save song file**, which downloads a `.pianotiles` file with the song, its audio and its tuning in one. On the other device, choose that file with **Add a song** (or drop it on the list). The song comes back exactly as it was, with no listening needed. Adding the same file again replaces that song; a different song with the same name gets a name of its own.
+A song (its chart and its audio) is saved in that browser's own storage (IndexedDB), so it is still there next time, but **only on that device and in that browser**. To play it somewhere else, open **Tune this song**, then **Save song file**, which downloads a `.pianotiles` file with the song, its audio and its tuning in one. On the other device, choose that file with **Add your own song** (or drop it on the list). The song comes back exactly as it was, with no listening needed. Adding the same file again replaces that song; a different song with the same name gets a name of its own.
 
 Clearing a site's data removes its songs, and a private window forgets them when it closes (the game says so when the browser won't keep them). Save the song files of anything you would miss.
 
 ### How the tiles are placed
 
-The analyser finds the tempo and where the first beat falls, then puts the tiles on a fixed grid from there. It looks for sudden jumps in the sound (it doesn't tell instruments apart) and puts a tile on the strongest hits that fall on the grid, keeping a gap between tiles and leaving rests where the music is quiet. A hit followed by sustained sound with nothing struck over it becomes a hold, and the hardest hits, where the low, middle and high of the sound all land together, can become doubles. It does not transcribe the melody, so the tiles follow the *rhythm* rather than the notes.
+The analyser finds the tempo and where the first beat falls, then puts the tiles on a fixed grid from there. It looks for sudden jumps in the sound (it doesn't tell instruments apart) and puts a tile on the strongest hits that fall on the grid, keeping a gap between tiles and leaving rests where the music is quiet.
+
+The tiles are spread with a **quota per stretch of music**: every eight beats gets a share of the tiles (about 60% of what the difficulty allows, taken from that stretch's own strongest hits), and only what is left over goes to the loudest hits anywhere. That is what keeps a quiet verse from being emptied out by a loud chorus, while a truly silent stretch (a break, a fade) still gets none. A chorus still ends up busier than a verse, because it has more strong hits to choose from. Hits that land on the beat are slightly preferred. A hit followed by sustained sound with nothing struck over it becomes a hold, and the hardest hits, where the low, middle and high of the sound all land together, can become doubles. It does not transcribe the melody, so the tiles follow the *rhythm* rather than the notes.
 
 That works best on music with a steady beat: pop, rock, electronic, hip-hop. Music that speeds up and slows down (live playing, classical rubato) can't sit on a fixed grid, and the analyser says so with a warning on the song.
 
 ### Tune this song
 
-Every added song has a **Tune this song** panel. Changes are saved on this device straight away.
+Every added song has a **Tune** screen of its own, opened with **Tune this song** (it appears under the song you have selected) or the **Tune** button on the "Added" message. **Songs** or `Esc` goes back to the list; **Try it** plays the song, and quitting the game brings you back to the Tune screen so you can adjust and try again.
 
 | Control | Use it when |
 | --- | --- |
-| **Sync** slider (±250 ms) | The tiles reach the bar a little before or after the beat you hear. Bluetooth speakers and headphones add delay of their own, so this is often the first thing to try. |
-| **Tempo** + **Re-chart** | The tiles drift away from the music, or the detected tempo is half or double the real one. Type the right BPM. **Detect the tempo again** goes back to automatic. |
-| **Easy / Normal / Busy** + **Re-chart** | There are too many or too few tiles. |
+| **Sync** slider (±250 ms) + **Save** | The tiles reach the bar a little before or after the beat you hear. Bluetooth speakers and headphones add delay of their own, so this is often the first thing to try. |
+| **Tempo** | The tiles drift away from the music, or the detected tempo is half or double the real one. Type the right BPM, then **Re-chart**. **Find the tempo again** goes back to automatic. |
+| **Easy / Normal / Busy** + **Re-chart** | There are too many or too few tiles. **Re-chart** is always available, so you can also use it to lay the tiles out again with the latest analyser without changing anything else. |
 | **Name** + **Save** | To rename it. |
 | **Save song file** | To take the song to another device, or keep a backup. |
 | **Remove song…** | To take it out of this device (asks first). |
+
+Changes are saved on this device straight away.
 
 ### Notes
 
@@ -142,7 +148,7 @@ The 60fps loop lives outside React so per-frame movement never triggers a render
 
 | File | Role |
 | --- | --- |
-| `src/game/timeline.ts` | The song clock: row arrival times, scroll position, lap speed-ups |
+| `src/game/timeline.ts` | The song clock: row arrival times, scroll position, lap speed-ups and the rest and count-in before each lap |
 | `src/game/engine.ts` | Frame loop, beat layout (gaps included), tap/double/hold rules, judgments, chains, laps |
 | `src/game/renderer.ts` | Owns the tile DOM nodes; positions are written straight to `transform` |
 | `src/game/effects.ts` | Canvas visuals: animated backdrop, the timing bar, hit bursts, ripples, popups, banners |
@@ -151,6 +157,7 @@ The 60fps loop lives outside React so per-frame movement never triggers a render
 | `src/songs/` | Song library, note-notation parser, and the arrangement builder that turns melody + chords + groove into a full track |
 | `src/songs/analysis/` | The in-browser analyser for added songs: spectral onsets, tempo and beat grid, tile placement (`analyze.ts` and friends), run in a worker (`analyzer.worker.ts`, `client.ts`) |
 | `src/songs/` (added songs) | `decode.ts` reads a file's audio, `importer.ts` adds / re-charts / tunes / removes a song, `store.ts` keeps songs in IndexedDB, `bundle.ts` is the `.pianotiles` song file, `chart.ts` and `library.ts` turn stored charts into playable songs |
+| `src/components/` | The screens and overlays: song list (`SongSelect`, `ImportPanel`, `JobStatus`), the separate `TuneScreen`, the HUD, pause and game over |
 | `src/hooks/useGame.ts` | Bridges the engine to React; state updates only on start, each score, each lap, pause and game over |
 | `src/index.css` | Tile looks and animations, switched by `data-kind` / `data-state` attributes |
 | `src/config.ts` | Tunables: timing windows, points, chain steps, lap speed factor |

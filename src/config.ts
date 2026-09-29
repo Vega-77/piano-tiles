@@ -14,9 +14,17 @@ export const LEAD_ROWS = 4;
 
 /**
  * Each time the song finishes, tiles fall (and the music plays) this many times faster
- * than on the previous lap: lap 0 = 1x, lap 1 = 1.3x, lap 2 = 1.69x, and so on.
+ * than on the previous lap: lap 0 = 1x, lap 1 = 1.2x, lap 2 = 1.44x, and so on.
  */
-export const LAP_SPEED_FACTOR = 1.3;
+export const LAP_SPEED_FACTOR = 1.2;
+
+/**
+ * After every lap the board empties for at least this long (seconds, at the new speed) so the
+ * player can take in the speed jump, then a count-in of COUNT_IN_BEATS beats leads into the next
+ * lap.
+ */
+export const LAP_REST_SECONDS = 1.5;
+export const COUNT_IN_BEATS = 4;
 
 // Timing windows: seconds either side of the moment a tile is centred on the bar.
 export const PERFECT_WINDOW = 0.075;

@@ -182,8 +182,8 @@ interface SongSelectProps {
   adder?: ReactNode;
   /** Above the Play button: progress or the result of adding a song. */
   status?: ReactNode;
-  /** Under the selected song's card, for songs that can be tuned. */
-  tuner?: (song: Song) => ReactNode;
+  /** Opens the tuning screen for a song added on this device; leave out to have no way to it. */
+  onTune?: (song: Song) => void;
 }
 
 const carriesFiles = (event: DragEvent) => Array.from(event.dataTransfer.types).includes('Files');
@@ -200,7 +200,7 @@ export function SongSelect({
   onDropFile,
   adder,
   status,
-  tuner,
+  onTune,
 }: SongSelectProps) {
   const selected = songs.find((song) => song.id === selectedId) ?? songs[0];
   const loading = loadingId !== null;
@@ -261,7 +261,19 @@ export function SongSelect({
               selected={song.id === selected.id}
               onSelect={() => onSelect(song.id)}
             />
-            {song.id === selected.id && tuner?.(song)}
+            {song.id === selected.id && song.imported && onTune && (
+              <button
+                type="button"
+                onClick={() => onTune(song)}
+                className="btn-ghost rise-in mt-2 flex w-full items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-bold text-white"
+              >
+                <svg viewBox="0 0 24 24" className="h-4 w-4 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" aria-hidden>
+                  <path d="M4 7h10m4 0h2M4 17h2m4 0h10M14 4v6m-8 3v6" />
+                </svg>
+                Tune this song
+                {song.imported.warnings.length > 0 && <span className="text-amber-300">· check the beat</span>}
+              </button>
+            )}
           </li>
         ))}
         {problems.length > 0 && (

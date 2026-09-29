@@ -30,13 +30,23 @@ export interface SynthOptions {
   jitter?: number;
   /** Speeds the song up: a beat that would fall at t falls at t − warp·t²/seconds. */
   warp?: number;
+  /**
+   * Which stretches of the song (by time) are verses: only a kick on the bar, soft hats on the
+   * beat and the bass, all much quieter, where the chorus has the full band.
+   */
+  verse?: (time: number) => boolean;
+  /** Which stretches of the song (by time) have nothing playing at all, like a break or a fade. */
+  silent?: (time: number) => boolean;
 }
+
+/** How much quieter than the chorus a verse plays. */
+const VERSE_GAIN = 0.3;
 
 /**
  * Kick, snare, hats, a bass line and a lead, mono at SYNTH_RATE. Beats fall every 60/bpm seconds
  * from `offset`, with the lead and hats on the eighth notes between.
  */
-export function synth({ bpm, offset, seconds, seed = 1, jitter = 0, warp = 0 }: SynthOptions): Float32Array {
+export function synth({ bpm, offset, seconds, seed = 1, jitter = 0, warp = 0, verse, silent }: SynthOptions): Float32Array {
   const random = mulberry32(seed);
   const gauss = () => Math.sqrt(-2 * Math.log(1 - random())) * Math.cos(2 * Math.PI * random());
   const out = new Float64Array(Math.floor(seconds * SYNTH_RATE));
@@ -90,13 +100,17 @@ export function synth({ bpm, offset, seconds, seed = 1, jitter = 0, warp = 0 }: 
   for (let step = 0; ; step++) {
     const at = offset + (step * beat) / 2; // eighth notes
     if (at >= seconds) break;
+    if (silent?.(at)) continue;
     const onBeat = step % 2 === 0;
     const barPosition = Math.floor(step / 2) % 4;
-    if (onBeat && (barPosition === 0 || barPosition === 2)) add(at, kick, 0.9);
-    if (onBeat && (barPosition === 1 || barPosition === 3)) add(at, snare, 0.6);
-    add(at, hat, onBeat ? 0.25 : 0.14);
-    if (onBeat) add(at, pluck(65.41 * (barPosition < 2 ? 1 : 1.5), 0.25), 0.35);
-    if ([0, 3, 6].includes(step % 8)) add(at, pluck(scale[Math.floor(random() * scale.length)], 0.18), 0.25);
+    const quiet = verse?.(at) === true;
+    const level = quiet ? VERSE_GAIN : 1;
+    if (onBeat && (barPosition === 0 || (!quiet && barPosition === 2))) add(at, kick, 0.9 * level);
+    if (onBeat && !quiet && (barPosition === 1 || barPosition === 3)) add(at, snare, 0.6);
+    if (onBeat || !quiet) add(at, hat, (onBeat ? 0.25 : 0.14) * level);
+    if (onBeat) add(at, pluck(65.41 * (barPosition < 2 ? 1 : 1.5), 0.25), 0.35 * level);
+    const note = [0, 3, 6].includes(step % 8) ? scale[Math.floor(random() * scale.length)] : 0;
+    if (note > 0 && !quiet) add(at, pluck(note, 0.18), 0.25);
   }
 
   let loudest = 0;

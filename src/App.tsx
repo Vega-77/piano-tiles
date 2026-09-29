@@ -1,4 +1,4 @@
-import { useCallback, useEffect, type CSSProperties } from 'react';
+import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import { Board } from './components/Board';
 import { GameOverOverlay } from './components/GameOverOverlay';
 import { Hud } from './components/Hud';
@@ -6,11 +6,10 @@ import { ImportPanel } from './components/ImportPanel';
 import { JobStatus } from './components/JobStatus';
 import { PauseOverlay } from './components/PauseOverlay';
 import { SongSelect } from './components/SongSelect';
-import { TunePanel } from './components/TunePanel';
+import { TuneScreen } from './components/TuneScreen';
 import { useGame } from './hooks/useGame';
 import { useImporter } from './hooks/useImporter';
 import { useLibrary } from './hooks/useLibrary';
-import type { Song } from './types';
 
 /** A file dropped anywhere the menu isn't would otherwise replace the game with the file. */
 function useKeepFileDropsOut() {
@@ -36,7 +35,12 @@ export default function App() {
   const theme = { '--hue': activeSong.hue, '--hue2': activeSong.hue2 } as CSSProperties;
   useKeepFileDropsOut();
 
-  const { add, remove, working } = importer;
+  // The menu is either for picking a song or, when a song has been chosen to tune, for tuning it.
+  // (It stays chosen while that song is played, so quitting the game comes back to the tuning.)
+  const [tuningId, setTuningId] = useState<string | null>(null);
+  const tuning = library.songs.find((song) => song.id === tuningId && song.imported);
+
+  const { add, remove, dismiss, working } = importer;
   const addSong = useCallback(
     async (file: File) => {
       if (working) return;
@@ -47,23 +51,34 @@ export default function App() {
   );
   const removeSong = useCallback(
     async (id: string) => {
-      if (await remove(id)) setSelectedId(library.songs[0].id);
+      if (await remove(id)) {
+        setTuningId(null);
+        setSelectedId(library.songs[0].id);
+      }
     },
     [remove, library.songs, setSelectedId],
   );
+  const tune = useCallback(
+    (id: string) => {
+      dismiss();
+      setSelectedId(id);
+      setTuningId(id);
+    },
+    [dismiss, setSelectedId],
+  );
+  const stopTuning = useCallback(() => setTuningId(null), []);
 
-  const tuner = (song: Song) =>
-    song.imported ? (
-      <TunePanel
-        key={song.id}
-        song={song}
-        busy={working !== null}
-        onTune={importer.tune}
-        onRechart={importer.rechart}
-        onSave={importer.save}
-        onRemove={removeSong}
-      />
-    ) : null;
+  const jobStatus = (onTune?: (id: string) => void) => (
+    <JobStatus
+      working={working}
+      error={importer.error}
+      added={importer.added}
+      persistent={library.persistent}
+      onCancel={importer.cancel}
+      onDismiss={dismiss}
+      onTune={onTune}
+    />
+  );
 
   return (
     <div className="relative h-dvh w-full overflow-hidden bg-zinc-950">
@@ -71,11 +86,11 @@ export default function App() {
       <canvas ref={refs.bgRef} className="absolute inset-0 h-full w-full" aria-hidden />
 
       <main className="relative flex h-dvh w-full items-center justify-center">
-        {/* Portrait 9:16 stage on desktop; fills the screen on phones. */}
+        {/* A 4:5 stage on desktop (never wider than a comfortable reading width); fills the screen on phones. */}
         <div
           ref={refs.stageRef}
           style={theme}
-          className="stage relative h-dvh w-[min(100vw,56.25dvh)] overflow-hidden bg-black/40"
+          className="stage relative h-dvh w-[min(100vw,80dvh,56rem)] overflow-hidden bg-black/40"
         >
           <Board
             boardRef={refs.boardRef}
@@ -98,7 +113,22 @@ export default function App() {
             />
           )}
 
-          {state.status === 'menu' && (
+          {state.status === 'menu' && tuning && (
+            <TuneScreen
+              key={tuning.id}
+              song={tuning}
+              busy={working !== null}
+              status={jobStatus()}
+              onTune={importer.tune}
+              onRechart={importer.rechart}
+              onSave={importer.save}
+              onRemove={removeSong}
+              onPlay={start}
+              onBack={stopTuning}
+            />
+          )}
+
+          {state.status === 'menu' && !tuning && (
             <SongSelect
               songs={library.songs}
               stats={stats}
@@ -109,26 +139,9 @@ export default function App() {
               loadError={game.loadError}
               problems={library.problems}
               onDropFile={addSong}
-              adder={
-                <ImportPanel
-                  busy={working !== null}
-                  persistent={library.persistent}
-                  choices={importer.choices}
-                  onChoices={importer.setChoices}
-                  onFile={addSong}
-                />
-              }
-              status={
-                <JobStatus
-                  working={working}
-                  error={importer.error}
-                  added={importer.added}
-                  persistent={library.persistent}
-                  onCancel={importer.cancel}
-                  onDismiss={importer.dismiss}
-                />
-              }
-              tuner={tuner}
+              adder={<ImportPanel busy={working !== null} persistent={library.persistent} onFile={addSong} />}
+              status={jobStatus(tune)}
+              onTune={(song) => tune(song.id)}
             />
           )}
 

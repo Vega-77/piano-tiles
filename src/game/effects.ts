@@ -20,6 +20,8 @@ export interface Fx {
   popup(text: string, x: number, y: number, options?: { sub?: string; judgment?: Judgment }): void;
   /** Big centred text that fades out, e.g. "Get ready" or "Lap 2". */
   banner(text: string, sub?: string): void;
+  /** One big count-in number ("4", "3", …) that pops and fades; a new one replaces the last. */
+  count(text: string): void;
   /** Sparks rising from a finger holding a hold tile; call every frame. */
   stream(x: number, y: number): void;
   fail(x: number, y: number): void;
@@ -34,6 +36,7 @@ export const noopFx: Fx = {
   hit() {},
   popup() {},
   banner() {},
+  count() {},
   stream() {},
   fail() {},
   pulse() {},
@@ -45,6 +48,7 @@ const BG_SCALE = 0.5;
 const MAX_PARTICLES = 320;
 const GLYPHS = ['♪', '♫', '♩', '♬'];
 const BANNER_SECONDS = 1.7;
+const COUNT_SECONDS = 0.6;
 
 const JUDGMENT_HUE: Record<Judgment, number> = { perfect: 48, good: 160, ok: 215 };
 
@@ -59,6 +63,7 @@ interface Particle { x: number; y: number; vx: number; vy: number; age: number; 
 interface Ripple { x: number; y: number; age: number; hue: number }
 interface Popup { text: string; sub: string; x: number; y: number; age: number; hue: number }
 interface Banner { text: string; sub: string; age: number }
+interface Countdown { text: string; age: number }
 interface Star { x: number; y: number; z: number; phase: number }
 interface Glyph { x: number; y: number; speed: number; sway: number; char: string; size: number; phase: number }
 
@@ -101,6 +106,7 @@ export class Effects implements Fx {
   private ripples: Ripple[] = [];
   private popups: Popup[] = [];
   private banners: Banner[] = [];
+  private countdown: Countdown | null = null;
   private readonly stars: Star[] = Array.from({ length: 90 }, () => ({
     x: Math.random(), y: Math.random(), z: rand(0.2, 1), phase: rand(0, TAU),
   }));
@@ -173,6 +179,11 @@ export class Effects implements Fx {
 
   banner(text: string, sub = ''): void {
     this.banners.push({ text, sub, age: 0 });
+  }
+
+  count(text: string): void {
+    this.countdown = { text, age: 0 };
+    this.pulse(0.15);
   }
 
   stream(x: number, y: number): void {
@@ -253,6 +264,10 @@ export class Effects implements Fx {
     this.popups = this.popups.filter((p) => p.age < 0.9);
     for (const b of this.banners) b.age += dt;
     this.banners = this.banners.filter((b) => b.age < BANNER_SECONDS);
+    if (this.countdown) {
+      this.countdown.age += dt;
+      if (this.countdown.age >= COUNT_SECONDS) this.countdown = null;
+    }
 
     if (this.reducedMotion) return;
     const drift = 1 + this.energy * 4;
@@ -398,6 +413,24 @@ export class Effects implements Fx {
         ctx.fillStyle = 'hsl(0 0% 100% / 0.95)';
         ctx.fillText(b.sub, 0, 34);
       }
+      ctx.restore();
+    }
+
+    const count = this.countdown;
+    if (count) {
+      const t = count.age / COUNT_SECONDS;
+      const pop = this.reducedMotion ? 1 : 1 + Math.max(0, 0.15 - count.age) * 5;
+      ctx.save();
+      ctx.translate(width / 2, height * 0.5);
+      ctx.scale(pop, pop);
+      ctx.globalAlpha = t < 0.5 ? 1 : 1 - (t - 0.5) / 0.5;
+      ctx.textBaseline = 'middle';
+      ctx.lineWidth = 10;
+      ctx.strokeStyle = 'hsl(0 0% 0% / 0.55)';
+      ctx.font = '900 120px ui-sans-serif, system-ui, sans-serif';
+      ctx.strokeText(count.text, 0, 0);
+      ctx.fillStyle = `hsl(${this.hue} 100% 88%)`;
+      ctx.fillText(count.text, 0, 0);
       ctx.restore();
     }
   }

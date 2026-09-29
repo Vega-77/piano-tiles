@@ -57,7 +57,7 @@ export function analyze(samples: Float32Array, options: AnalyzeOptions, onProgre
 
   const rows = Math.max(1, Math.ceil((features.duration - grid.phase) * grid.rate - 1e-9));
   onProgress?.({ stage: 'chart', message: 'Placing the tiles', fraction: 0.95 });
-  const tiles = chooseTiles(features, grid, rows, options.density);
+  const tiles = chooseTiles(features, grid, rows, options.density, rowsPerBeat);
   const numbers = describe(tiles, grid, features.duration);
   const doubles = [...tiles.tokens.values()].filter((tile) => tile.kind === 'double').length;
 

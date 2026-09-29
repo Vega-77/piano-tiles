@@ -4,6 +4,7 @@ import { AnalysisError, DENSITIES, MAX_SECONDS, analyze, hueOf, type Measured } 
 import { SAMPLE_RATE, computeFeatures } from './features';
 import { MAX_ROWS_PER_SECOND, MIN_ROWS_PER_SECOND, pickRowsPerBeat, rowsPerBeatForBpm } from './grid';
 import { synthForAnalysis } from './synth';
+import { DENSITY } from './tiles';
 
 /**
  * These run the analyser on songs made here, where the true tempo and the first beat are known, so
@@ -108,6 +109,57 @@ describe('the analyser on made-up songs', () => {
     }
     expect(onBeat / total).toBeGreaterThan(0.7);
   }, SLOW);
+
+  describe('a song with quiet verses and a loud chorus', () => {
+    const verse = (time: number) => time % 32 < 16;
+    let samples: Float32Array;
+    beforeAll(async () => {
+      samples = await synthForAnalysis({ bpm: 120, offset: 0.2, seconds: 96, seed: 5, verse });
+    }, SLOW);
+
+    /** Tiles that start in the verses and in the choruses. */
+    function share(chart: Measured): { verse: number; chorus: number } {
+      const rate = rowsPerSecond(chart);
+      const out = { verse: 0, chorus: 0 };
+      let position = 0;
+      for (const token of chart.chart.split(/\s+/).filter(Boolean)) {
+        if (token !== '.') out[verse(chart.offset + position / rate) ? 'verse' : 'chorus']++;
+        position += token.startsWith('x~') ? Number(token.slice(2)) : 1;
+      }
+      return out;
+    }
+
+    for (const density of DENSITIES) {
+      it(`does not leave the verses bare on ${density}, and still makes the chorus busier`, () => {
+        const { verse: quiet, chorus: loud } = share(analyze(samples, { density }));
+        expect(quiet).toBeGreaterThan(0.3 * loud);
+        expect(loud).toBeGreaterThan(quiet);
+      }, SLOW);
+    }
+
+    it('keeps the difficulties: the same number of tiles, wherever they fall', () => {
+      const tiles = DENSITIES.map((density) => analyze(samples, { density }).analysis!.tiles);
+      const rows = analyze(samples, NORMAL).analysis!.rows;
+      tiles.forEach((count, i) => expect(count).toBeGreaterThan(0.95 * Math.trunc(DENSITY[DENSITIES[i]].fraction * rows)));
+      expect(tiles[0]).toBeLessThan(tiles[1]);
+      expect(tiles[1]).toBeLessThan(tiles[2]);
+    }, SLOW);
+
+    it('leaves a silent stretch bare rather than filling it with noise', async () => {
+      const gap = (time: number) => time >= 40 && time < 56;
+      const song = await synthForAnalysis({ bpm: 120, offset: 0.2, seconds: 96, seed: 5, verse, silent: gap });
+      const chart = analyze(song, NORMAL);
+      const rate = rowsPerSecond(chart);
+      let inGap = 0;
+      let position = 0;
+      for (const token of chart.chart.split(/\s+/).filter(Boolean)) {
+        const time = chart.offset + position / rate;
+        if (token !== '.' && time >= 41 && time < 55) inGap++; // (a kick's tail runs a little past the gap's edges)
+        position += token.startsWith('x~') ? Number(token.slice(2)) : 1;
+      }
+      expect(inGap).toBe(0);
+    }, SLOW);
+  });
 
   it('is deterministic, and writes a chart the game can read', () => {
     const first = analyze(songs.c.samples!, NORMAL);

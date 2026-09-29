@@ -26,6 +26,25 @@ export const DENSITY: Record<Density, Settings> = {
 const MAX_TAP_RATE = 4.5;
 export const MIN_TILES = 20;
 
+/** The song is cut into stretches of this many beats (two bars), each promised some tiles. */
+const WINDOW_BEATS = 8;
+/**
+ * The share of the average tile density that every stretch with something going on is promised,
+ * however much louder the rest of the song is. Without it the loud hits of a chorus would use up
+ * all the tiles, and a verse would be left nearly bare.
+ */
+const WINDOW_SHARE = 0.6;
+/** Within a stretch, hits weaker than this share of its strongest one are just noise. */
+const WINDOW_FLOOR = 0.15;
+/**
+ * A stretch whose strongest hit is under this share of the loud hits is left bare: it is a silence
+ * or a fade, and the hits the analyser hears there are only the noise in the recording (about a
+ * tenth of a loud hit, where a quiet verse is nearer four tenths).
+ */
+const AUDIBLE = 0.15;
+/** How much more a hit on the beat is worth than one between beats when the two compete for a tile. */
+const BEAT_BONUS = 1.2;
+
 export type TileKind = 'tap' | 'double' | 'hold';
 export interface Tile {
   kind: TileKind;
@@ -93,8 +112,24 @@ function rowLoudness(features: Features, grid: Grid, rows: number): Float64Array
   return total;
 }
 
-/** Picks which rows get a tile, and which of those are holds and doubles. */
-export function chooseTiles(features: Features, grid: Grid, rows: number, level: Density): Tiles {
+/** Which rows fall on the beat: the ones a whole number of beats from the row where the hits are strongest. */
+function onTheBeat(strength: Float64Array, rowsPerBeat: number): Uint8Array {
+  const totals = new Float64Array(rowsPerBeat);
+  for (let k = 0; k < strength.length; k++) totals[k % rowsPerBeat] += strength[k];
+  let beat = 0;
+  for (let i = 1; i < rowsPerBeat; i++) if (totals[i] > totals[beat]) beat = i;
+  return Uint8Array.from(strength, (_, k) => (k % rowsPerBeat === beat ? 1 : 0));
+}
+
+/**
+ * Picks which rows get a tile, and which of those are holds and doubles.
+ *
+ * The tiles go on the strongest hits, in two rounds. First every stretch of the song is given its
+ * share (WINDOW_SHARE) of the average density, on the strongest hits within that stretch, so a
+ * quiet verse gets tiles on the hits that are strong for a verse. Then what is left of the total
+ * goes to the strongest hits anywhere, which is where a chorus gets its extra.
+ */
+export function chooseTiles(features: Features, grid: Grid, rows: number, level: Density, rowsPerBeat: number): Tiles {
   const settings = DENSITY[level];
   const { strength, agree } = slotStrengths(features, grid, rows);
   const loudness = rowLoudness(features, grid, rows);
@@ -102,18 +137,42 @@ export function chooseTiles(features: Features, grid: Grid, rows: number, level:
   const gap = Math.max(settings.gap, Math.ceil(grid.rate / MAX_TAP_RATE - 1e-9));
   const active = Array.from(strength).filter((value) => value > 0);
   if (active.length === 0) throw new AnalysisError("Couldn't find any beats in that audio.");
-  const floor = 0.12 * percentile(active, 98);
+  const loud = percentile(active, 98);
+  const floor = 0.12 * loud;
   const wanted = Math.trunc(settings.fraction * rows);
 
-  // The strongest rows first (the earlier row, if two are equally strong), each blocking its neighbours.
-  const order = Array.from({ length: rows }, (_, k) => k).sort((a, b) => strength[b] - strength[a] || a - b);
+  const beat = onTheBeat(strength, rowsPerBeat);
+  const worth = Float64Array.from(strength, (value, k) => value * (beat[k] ? BEAT_BONUS : 1));
+  // Best first (the earlier row, if two are worth the same).
+  const best = (from: number, to: number) =>
+    Array.from({ length: to - from }, (_, i) => from + i).sort((a, b) => worth[b] - worth[a] || a - b);
+
   const blocked = new Uint8Array(rows);
   const chosen: number[] = [];
-  for (const k of order) {
-    if (chosen.length >= wanted || strength[k] < floor) break;
-    if (blocked[k]) continue;
+  const take = (k: number) => {
     chosen.push(k);
-    blocked.fill(1, Math.max(0, k - gap + 1), Math.min(rows, k + gap));
+    blocked.fill(1, Math.max(0, k - gap + 1), Math.min(rows, k + gap)); // (each tile blocks its neighbours)
+  };
+
+  const size = WINDOW_BEATS * rowsPerBeat;
+  for (let from = 0; from < rows; from += size) {
+    const to = Math.min(rows, from + size);
+    let peak = 0;
+    for (let k = from; k < to; k++) peak = Math.max(peak, strength[k]);
+    if (peak < AUDIBLE * loud) continue;
+    const share = Math.round(WINDOW_SHARE * settings.fraction * (to - from));
+    let taken = 0;
+    for (const k of best(from, to)) {
+      if (taken >= share || chosen.length >= wanted) break;
+      if (blocked[k] || strength[k] < WINDOW_FLOOR * peak) continue;
+      take(k);
+      taken++;
+    }
+  }
+
+  for (const k of best(0, rows)) {
+    if (chosen.length >= wanted) break;
+    if (!blocked[k] && strength[k] >= floor) take(k);
   }
   chosen.sort((a, b) => a - b);
   if (chosen.length < MIN_TILES) {

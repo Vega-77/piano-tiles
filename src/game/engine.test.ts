@@ -3,8 +3,10 @@ import {
   BAR_Y,
   COMBO_MAX_MULTIPLIER,
   COMBO_STEP,
+  COUNT_IN_BEATS,
   GOOD_WINDOW,
   HOLD_TICK_POINTS,
+  LAP_REST_SECONDS,
   LAP_SPEED_FACTOR,
   LEAD_ROWS,
   OK_WINDOW,
@@ -13,11 +15,13 @@ import {
   TILE_HEIGHT,
 } from '../config';
 import { buildTrack, type Arrangement } from '../songs/arrangement';
+import { beatRows } from '../songs/notation';
 import type { BeatSpec, GameState, MusicEvent, Recording, Song, Tile } from '../types';
 import type { Sound } from './audio';
-import { noopFx } from './effects';
+import { noopFx, type Fx } from './effects';
 import { comboMultiplier, GameEngine, judge, type GameOverResult } from './engine';
 import { getBest } from './storage';
+import { Timeline } from './timeline';
 
 // ---- a controllable song clock; the fake Sound reads it, and each "frame" runs the real loop ----
 let songTime = 0;
@@ -77,9 +81,9 @@ function makeSong(beats: BeatSpec[], speed: number, arrangement?: Arrangement, r
 interface Scheduled { event: MusicEvent; at: number; secondsPerRow: number }
 interface Played { url: string; at: number; rate: number }
 
-interface SetupOptions { speed?: number; arrangement?: Arrangement; recording?: Recording }
+interface SetupOptions { speed?: number; arrangement?: Arrangement; recording?: Recording; effects?: Fx }
 
-function setup(beats: BeatSpec[], { speed = SPEED, arrangement, recording }: SetupOptions = {}) {
+function setup(beats: BeatSpec[], { speed = SPEED, arrangement, recording, effects = noopFx }: SetupOptions = {}) {
   const scheduled: Scheduled[] = [];
   const played: Played[] = [];
   const calls = { started: 0, stopped: 0, suspended: 0, resumed: 0, levelUps: 0, errors: 0 };
@@ -101,7 +105,7 @@ function setup(beats: BeatSpec[], { speed = SPEED, arrangement, recording }: Set
   const engine = new GameEngine({
     layer: document.createElement('div'),
     audio,
-    effects: noopFx,
+    effects,
     onStateChange: (state) => states.push(state),
     onGameOver: (result) => results.push(result),
   });
@@ -109,7 +113,11 @@ function setup(beats: BeatSpec[], { speed = SPEED, arrangement, recording }: Set
   const song = makeSong(beats, speed, arrangement, recording);
   engine.start(song);
   const rate = speed / TILE_HEIGHT; // rows per second on lap 0
-  return { engine, song, scheduled, played, calls, states, results, rate, t0: START + LEAD_ROWS / rate };
+  const t0 = START + LEAD_ROWS / rate;
+  // The same clock the engine builds, to say when each lap starts and how long its rest is.
+  const rows = beats.reduce((sum, beat) => sum + beatRows(beat), 0);
+  const timeline = new Timeline(rate, rows, t0, COUNT_IN_BEATS * song.rowsPerBeat);
+  return { engine, song, scheduled, played, calls, states, results, rate, t0, timeline };
 }
 
 function must<T>(value: T | undefined | null): T {
@@ -137,7 +145,7 @@ function playPerfectly(engine: GameEngine, until: () => boolean, maxBeats = 1000
   for (let i = 0; i < maxBeats && !until() && engine.getState().status === 'playing'; i++) {
     const group = nextBeat(engine);
     if (group.length === 0) {
-      step();
+      step(6); // nothing to tap yet, e.g. through the rest between laps
       continue;
     }
     goTo(group[0].time);
@@ -148,6 +156,11 @@ function playPerfectly(engine: GameEngine, until: () => boolean, maxBeats = 1000
       engine.release(`p${tile.id}`);
     }
   }
+}
+
+/** Run on through the rest and count-in that follow a lap, until the next lap's first tiles are on the board. */
+function throughBreak(engine: GameEngine, maxFrames = 3000): void {
+  for (let i = 0; i < maxFrames && nextBeat(engine).length === 0 && engine.getState().status === 'playing'; i++) step();
 }
 
 /** Let the clock run in small steps until the game ends (e.g. a tile is missed). */
@@ -328,9 +341,11 @@ describe('the music', () => {
     playPerfectly(engine, () => engine.getState().lap >= 1);
     const lap0 = scheduled.find((s) => s.event.kind === 'kick' && s.at > START + 2);
     expect(lap0?.secondsPerRow).toBeCloseTo(1 / rate, 9);
-    goTo(songTime + 0.3);
-    const last = scheduled[scheduled.length - 1];
-    expect(last.secondsPerRow).toBeCloseTo(1 / (rate * LAP_SPEED_FACTOR), 9);
+    const before = scheduled.length;
+    throughBreak(engine);
+    const later = scheduled.slice(before);
+    expect(later.length).toBeGreaterThan(0);
+    for (const item of later) expect(item.secondsPerRow).toBeCloseTo(1 / (rate * LAP_SPEED_FACTOR), 9);
   });
 
   it('is cut off when the game ends', () => {
@@ -374,13 +389,13 @@ describe('a recorded song', () => {
   });
 
   it('plays the recording again, faster, on every lap, still on the beat', () => {
-    const { engine, played, rate } = setup(eight(), { recording });
+    const { engine, played, rate, timeline } = setup(eight(), { recording });
     const due = new Map<number, number>(); // beat -> when its tile is due (tiles are removed once cleared)
     playPerfectly(engine, () => {
       for (const tile of engine.getTiles()) due.set(tile.beat, tile.time);
       return engine.getState().lap >= 2;
     });
-    goTo(songTime + 0.2);
+    goTo(timeline.lapStart(2) - 0.5); // through the rest, into the count-in of lap 2
     expect(played.map((p) => p.rate)).toEqual([1, LAP_SPEED_FACTOR, LAP_SPEED_FACTOR ** 2]);
 
     // Every lap, row `k` of the recording (offset + k rows in) arrives exactly when its tile is due.
@@ -771,20 +786,21 @@ describe('laps: the song ends and everything speeds up', () => {
     playPerfectly(engine, () => engine.getState().lap >= 3);
     expect(engine.getState().status).toBe('playing');
     const speeds = [0, 1, 2, 3].map((lap) => states.find((s) => s.lap === lap)?.speedMultiplier);
-    expect(speeds).toEqual([1, 1.3, 1.69, 2.2]);
+    expect(speeds).toEqual([1, 1.2, 1.44, 1.73]);
     expect(calls.levelUps).toBe(3);
     expect(engine.getState().speedMultiplier).toBe(Math.round(LAP_SPEED_FACTOR ** 3 * 100) / 100);
   });
 
-  it('starts the next lap exactly one song after the first, and plays it faster', () => {
-    const { engine, scheduled, t0, rate } = setup(manyTaps(4));
+  it('starts the next lap after a rest and a count-in, and plays it faster', () => {
+    const { engine, scheduled, timeline } = setup(manyTaps(4));
     playPerfectly(engine, () => engine.getState().lap >= 1);
     expect(engine.getState().lap).toBe(1);
-    const lap1Start = t0 + 4 / rate;
+    const lap1Start = timeline.lapStart(1);
+    expect(lap1Start).toBeGreaterThan(timeline.lapEnd(0) + LAP_REST_SECONDS);
     goTo(lap1Start + 1);
     const melody = scheduled.filter((s) => s.event.kind === 'melody');
     const lap0Gap = melody[1].at - melody[0].at;
-    const lap1 = melody.filter((n) => n.at >= lap1Start - 1e-9);
+    const lap1 = melody.filter((n) => n.at >= timeline.lapEnd(0));
     expect(lap1[0].at).toBeCloseTo(lap1Start, 9);
     expect(lap1[1].at - lap1[0].at).toBeCloseTo(lap0Gap / LAP_SPEED_FACTOR, 9);
   });
@@ -792,6 +808,7 @@ describe('laps: the song ends and everything speeds up', () => {
   it('makes tiles fall faster on later laps', () => {
     const { engine } = setup(manyTaps(2));
     playPerfectly(engine, () => engine.getState().lap >= 1);
+    throughBreak(engine);
     const tile = must(nextBeat(engine)[0]);
     const y1 = tile.yPos;
     goTo(songTime + 0.1);
@@ -801,9 +818,118 @@ describe('laps: the song ends and everything speeds up', () => {
   it('keeps the timing windows the same in seconds, so a perfect is still a perfect', () => {
     const { engine } = setup(manyTaps(2));
     playPerfectly(engine, () => engine.getState().lap >= 2);
+    throughBreak(engine);
     const before = engine.getState().score;
     tapAt(engine, nextBeat(engine)[0], PERFECT_WINDOW - 0.01);
     expect(engine.getState().score - before).toBeGreaterThanOrEqual(POINTS.perfect);
+  });
+
+  describe('the break between laps', () => {
+    const arrangement: Arrangement = {
+      rowsPerBar: 4,
+      chords: ['C', 'G'],
+      groove: { kick: 'x...', snare: '..x.', hat: 'xoxo', bass: '1...', chord: '.x..', pad: false },
+    };
+
+    it('empties the board once a lap is done, and puts the next lap first tile where the timeline says', () => {
+      const { engine, timeline } = setup(manyTaps(8), { arrangement });
+      playPerfectly(engine, () => engine.getState().lap >= 1);
+      expect(nextBeat(engine)).toEqual([]); // nothing to aim at through the rest
+      throughBreak(engine);
+      const [first] = nextBeat(engine);
+      expect(first.beat).toBe(8);
+      expect(first.time).toBeCloseTo(timeline.lapStart(1), 9);
+      goTo(first.time);
+      expect(centre(first)).toBeCloseTo(BAR_Y, 6);
+      const before = engine.getState().score;
+      engine.press(first.lane, 'p1');
+      expect(engine.getState().score - before).toBeGreaterThanOrEqual(POINTS.perfect);
+    });
+
+    it('names the new lap and its speed as soon as the break begins, and resets the progress bar', () => {
+      const { engine } = setup(manyTaps(8), { arrangement });
+      playPerfectly(engine, () => engine.getState().lap >= 1);
+      expect(engine.getState()).toMatchObject({ lap: 1, speedMultiplier: LAP_SPEED_FACTOR, progress: 0 });
+      throughBreak(engine);
+      tapAt(engine, nextBeat(engine)[0], 0);
+      tapAt(engine, nextBeat(engine)[0], 0);
+      expect(engine.getState().progress).toBeCloseTo(1 / 8, 2);
+    });
+
+    it('plays no music through the rest, then counts in one soft tick a beat, ending a beat before the first tile', () => {
+      const { engine, scheduled, timeline, song } = setup(manyTaps(8), { arrangement });
+      playPerfectly(engine, () => engine.getState().lap >= 1);
+      const before = scheduled.length;
+      goTo(timeline.lapStart(1) - 0.2);
+      const breakEvents = scheduled.slice(before).filter((s) => s.at < timeline.lapStart(1) - 1e-9);
+      const beat = song.rowsPerBeat / timeline.rate(1);
+
+      expect(breakEvents.map((s) => s.event.kind).sort()).toEqual(['hat', 'hat', 'hat', 'hat', 'kick']);
+      breakEvents.sort((a, b) => a.at - b.at);
+      const times = breakEvents.filter((s) => s.event.kind !== 'kick').map((s) => s.at);
+      expect(breakEvents[0].event.kind).toBe('kick');
+      expect(breakEvents[0].at).toBeCloseTo(timeline.lapStart(1) - COUNT_IN_BEATS * beat, 9);
+      // Ticks land a beat apart, the last one a beat ahead of the first tile.
+      expect(times[times.length - 1]).toBeCloseTo(timeline.lapStart(1) - beat, 9);
+      for (let i = 1; i < times.length; i++) expect(times[i] - times[i - 1]).toBeCloseTo(beat, 9);
+      // The first tick comes only after the rest (which is at least LAP_REST_SECONDS long).
+      expect(breakEvents[0].at - timeline.lapEnd(0)).toBeGreaterThanOrEqual(LAP_REST_SECONDS - 1e-9);
+    });
+
+    it('shows the count-in numbers on each beat, and only once each', () => {
+      const counts: string[] = [];
+      const effects: Fx = { ...noopFx, count: (text) => counts.push(text) };
+      const { engine, timeline, song } = setup(manyTaps(8), { effects });
+      playPerfectly(engine, () => engine.getState().lap >= 1);
+      expect(counts).toEqual([]); // (the first lap has its own lead-in and no numbers)
+      const beat = song.rowsPerBeat / timeline.rate(1);
+      const runTo = (time: number) => {
+        while (songTime < time) step();
+      };
+      runTo(timeline.lapStart(1) - COUNT_IN_BEATS * beat - 0.05);
+      expect(counts).toEqual([]);
+      runTo(timeline.lapStart(1) - COUNT_IN_BEATS * beat + 0.05);
+      expect(counts).toEqual(['4']);
+      runTo(timeline.lapStart(1) - COUNT_IN_BEATS * beat + 0.1);
+      expect(counts).toEqual(['4']);
+      runTo(timeline.lapStart(1) - beat + 0.05);
+      expect(counts).toEqual(['4', '3', '2', '1']);
+    });
+
+    it('counts in every later lap of a recorded song too, though its band is the recording', () => {
+      const recording: Recording = { url: 'songs/demo/audio.mp3', offset: 0.13, duration: 4.2 };
+      const { engine, scheduled, timeline } = setup(manyTaps(8), { recording });
+      playPerfectly(engine, () => engine.getState().lap >= 2);
+      goTo(timeline.lapStart(2) - 0.2);
+      const lap2 = scheduled.filter((s) => s.at > timeline.lapEnd(1) && s.at < timeline.lapStart(2));
+      expect(lap2.map((s) => s.event.kind).sort()).toEqual(['hat', 'hat', 'hat', 'hat', 'kick']);
+    });
+
+    it('does not punish a tap in the rest, since there is nothing to tap', () => {
+      const { engine, timeline } = setup(manyTaps(4));
+      playPerfectly(engine, () => engine.getState().lap >= 1);
+      const score = engine.getState().score;
+      goTo(timeline.lapEnd(0) + 0.5);
+      for (let lane = 0; lane < 4; lane++) engine.press(lane, `p${lane}`);
+      expect(engine.getState().status).toBe('playing');
+      expect(engine.getState().score).toBe(score);
+    });
+
+    it('lets the rest run on through the break without a miss, then ends the game if the first tile is ignored', () => {
+      const { engine, timeline } = setup(manyTaps(4));
+      playPerfectly(engine, () => engine.getState().lap >= 1);
+      goTo(timeline.lapStart(1) - 0.1);
+      expect(engine.getState().status).toBe('playing');
+      goTo(timeline.lapStart(1) + OK_WINDOW + 0.05);
+      expect(engine.getState().status).toBe('gameover');
+    });
+
+    it('does not lay out the next lap early: the board is empty through the rest', () => {
+      const { engine, timeline } = setup(manyTaps(4));
+      playPerfectly(engine, () => engine.getState().lap >= 1);
+      goTo(timeline.lapEnd(0) + 0.3);
+      expect(engine.getTiles().filter((t) => !t.isHit)).toEqual([]);
+    });
   });
 
   it('reports laps in the final stats and saves the best lap count', () => {

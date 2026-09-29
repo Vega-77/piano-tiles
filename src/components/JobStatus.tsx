@@ -9,10 +9,12 @@ interface JobStatusProps {
   persistent: boolean;
   onCancel: () => void;
   onDismiss: () => void;
+  /** Given the song just added, opens the screen to tune it; leave out to show no button. */
+  onTune?: (id: string) => void;
 }
 
 /** What is being done to a song, or just was: progress with a way to stop it, the new song, or what went wrong. */
-export function JobStatus({ working, error, added, persistent, onCancel, onDismiss }: JobStatusProps) {
+export function JobStatus({ working, error, added, persistent, onCancel, onDismiss, onTune }: JobStatusProps) {
   if (working) {
     return (
       <div role="status" className="rise-in mx-4 mb-2 rounded-2xl bg-white/10 p-3 text-sm ring-1 ring-white/15">
@@ -66,9 +68,7 @@ export function JobStatus({ working, error, added, persistent, onCancel, onDismi
     return (
       <div role="status" className="rise-in mx-4 mb-2 flex items-start gap-3 rounded-2xl bg-emerald-500/15 p-3 text-sm ring-1 ring-emerald-400/40">
         <div className="min-w-0 flex-1">
-          <p className="font-semibold text-emerald-100">
-            Added “{added.title}” at {Math.round(added.bpm)} BPM
-          </p>
+          <p className="font-semibold text-emerald-100">Added “{added.title}”</p>
           {warnings.map((warning) => (
             <p key={warning} className="mt-1 text-xs leading-snug text-amber-200">
               {warning}
@@ -76,13 +76,20 @@ export function JobStatus({ working, error, added, persistent, onCancel, onDismi
           ))}
           <p className="mt-1 text-xs text-white/55">
             {persistent
-              ? 'Saved on this device. To play it somewhere else, open “Tune this song” and save the song file.'
+              ? 'Saved on this device. If the tiles don’t feel right, tune the song.'
               : 'This browser can’t keep songs, so it is gone when you close the page.'}
           </p>
         </div>
-        <button type="button" onClick={onDismiss} className="btn-ghost shrink-0 rounded-full px-3 py-1 text-xs font-bold">
-          OK
-        </button>
+        <div className="flex shrink-0 flex-col gap-1.5">
+          {onTune && (
+            <button type="button" onClick={() => onTune(added.id)} className="btn-ghost rounded-full px-3 py-1 text-xs font-bold">
+              Tune
+            </button>
+          )}
+          <button type="button" onClick={onDismiss} className="btn-ghost rounded-full px-3 py-1 text-xs font-bold">
+            OK
+          </button>
+        </div>
       </div>
     );
   }
