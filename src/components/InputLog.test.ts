@@ -2,7 +2,7 @@ import { createElement } from 'react';
 import { describe, expect, it } from 'vitest';
 import { trace, tracing } from '../game/trace';
 import { mount, settle } from '../hooks/testing';
-import { InputLog, wantsInputLog } from './InputLog';
+import { heardLate, InputLog, wantsInputLog } from './InputLog';
 
 const touch = (type: string, pointerId: number, x = 30) =>
   new PointerEvent(type, { bubbles: true, cancelable: true, pointerType: 'touch', pointerId, clientX: x, clientY: 200 });
@@ -36,12 +36,26 @@ describe('the input readout', () => {
 
   it('keeps only the latest lines', async () => {
     const { container, unmount } = await mount(createElement(InputLog));
-    for (let i = 0; i < 20; i++) await settle(() => void document.body.dispatchEvent(touch('pointerup', 100 + i)));
+    for (let i = 0; i < 30; i++) await settle(() => void document.body.dispatchEvent(touch('pointerup', 100 + i)));
     const lines = container.querySelectorAll('p');
-    expect(lines.length).toBe(15); // the count, and fourteen lines
-    expect(container.textContent).toContain('#119');
-    expect(container.textContent).toContain('#106 ');
-    expect(container.textContent).not.toContain('#105 ');
+    expect(lines.length).toBe(21); // the count, and twenty lines
+    expect(container.textContent).toContain('#129');
+    expect(container.textContent).toContain('#110 ');
+    expect(container.textContent).not.toContain('#109 ');
+    await unmount();
+  });
+
+  it('says how late the page heard of a finger, when it did', async () => {
+    expect(heardLate({ timeStamp: 900 }, 1000)).toBe(' (heard 100ms late)');
+    expect(heardLate({ timeStamp: 990 }, 1000)).toBe(''); // (an ordinary frame's wait)
+    expect(heardLate({ timeStamp: 1010 }, 1000)).toBe('');
+    expect(heardLate({ timeStamp: Date.now() }, 1000)).toBe(''); // (some browsers stamp with the epoch)
+
+    const { container, unmount } = await mount(createElement(InputLog));
+    const late = touch('pointerdown', 7);
+    Object.defineProperty(late, 'timeStamp', { value: performance.now() - 480 });
+    await settle(() => void document.body.dispatchEvent(late));
+    expect(container.textContent).toMatch(/down \(heard \d{3}ms late\) touch #7/);
     await unmount();
   });
 

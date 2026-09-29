@@ -21,6 +21,7 @@ import { noopFx, type Fx } from './effects';
 import { comboMultiplier, GameEngine, judge, type GameOverResult } from './engine';
 import { getBest } from './storage';
 import { Timeline } from './timeline';
+import { listenToTrace } from './trace';
 
 /** How much faster than the first lap the given lap runs: 1, 1.2, 1.4, 1.6... */
 const speed = (lap: number) => 1 + LAP_SPEED_STEP * lap;
@@ -842,6 +843,33 @@ describe('double holds', () => {
     goTo(left.time);
     engine.press(left.lane + 1, 'p1');
     expect(engine.getState().status).toBe('gameover');
+  });
+});
+
+describe('the readout of what is due', () => {
+  /** Play `beats` perfectly with a listener on the trace, and hand back the "due" lines it heard, in order. */
+  function dueLines(beats: BeatSpec[]): string[] {
+    const heard: string[] = [];
+    listenToTrace((line) => heard.push(line));
+    try {
+      const { engine } = setup(beats);
+      playPerfectly(engine, () => false, beats.length);
+    } finally {
+      listenToTrace(null);
+    }
+    return heard.filter((line) => line.startsWith('due'));
+  }
+
+  it('says when a double, a hold or a double hold comes due, and says nothing of plain taps', () => {
+    const lines = dueLines([tap(), double(), tap(), hold(2), doubleHold(2), tap(), tap(), tap()]);
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toMatch(/^due: double in L[0-3] and L[0-3]$/);
+    expect(lines[1]).toMatch(/^due: hold in L[0-3]$/);
+    expect(lines[2]).toMatch(/^due: double hold in L(0 and L2|1 and L3)$/);
+  });
+
+  it('says nothing at all for a song of plain taps', () => {
+    expect(dueLines(manyTaps(6))).toEqual([]);
   });
 });
 

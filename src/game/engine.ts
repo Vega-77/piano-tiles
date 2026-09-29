@@ -20,7 +20,7 @@ import type { BarZone, Fx } from './effects';
 import { TileRenderer } from './renderer';
 import { getBest, recordRun } from './storage';
 import { Timeline } from './timeline';
-import { signedMs, trace } from './trace';
+import { signedMs, trace, tracing } from './trace';
 
 export interface RunStats {
   perfect: number;
@@ -176,6 +176,8 @@ export class GameEngine {
   private lastCleared: { lane: number; time: number } | null = null;
   private rafId = 0;
   private lastFrameAt = 0;
+  /** The last beat the `?input` readout was told was due. */
+  private announcedBeat = -1;
 
   constructor(options: EngineOptions) {
     this.renderer = new TileRenderer(options.layer);
@@ -227,6 +229,7 @@ export class GameEngine {
     this.stats = { perfect: 0, good: 0, ok: 0, maxChain: 0, tiles: 0, laps: 0 };
     this.lastCleared = null;
     this.lastFrameAt = 0;
+    this.announcedBeat = -1;
 
     this.effects.setTheme(song.hue, song.hue2);
     this.effects.setEnergy(0);
@@ -480,6 +483,7 @@ export class GameEngine {
 
     // A beat is missed once its tiles are too late to tap and still untouched.
     const beat = this.targetBeat();
+    this.announceDue(beat, now);
     const missed = this.tiles.filter(
       (t) => t.beat === beat && !t.isHit && t.hold?.phase !== 'holding' && now - t.time > OK_WINDOW,
     );
@@ -731,6 +735,21 @@ export class GameEngine {
 
   private tilesOfBeat(beat: number): Tile[] {
     return this.tiles.filter((t) => t.beat === beat);
+  }
+
+  /**
+   * For the `?input` readout: say when a beat of more than one tile, or of a hold, comes due, so the fingers that land
+   * for it can be lined up against the moment it was asked for. (Plain taps are left out: they would drown the rest.)
+   */
+  private announceDue(beat: number, now: number): void {
+    if (beat <= this.announcedBeat || !tracing()) return;
+    const tiles = this.tilesOfBeat(beat);
+    if (tiles.length === 0 || now < tiles[0].time) return;
+    this.announcedBeat = beat;
+    const holds = tiles.some((t) => t.kind === 'hold');
+    if (tiles.length === 1 && !holds) return;
+    const what = tiles.length > 1 ? (holds ? 'double hold' : 'double') : 'hold';
+    trace(() => `due: ${what} in L${tiles.map((t) => t.lane).join(' and L')}`);
   }
 
   /** The lowest beat that still has an uncleared tile, or -1. */

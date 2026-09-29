@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { listenToTrace } from '../game/trace';
 
 const EVENTS = ['pointerdown', 'pointerup', 'pointercancel', 'touchcancel'] as const;
-const KEPT = 14;
+const KEPT = 20;
 
 /** Whether the page was opened with `?input`, which shows what the screen is sending it. */
 export function wantsInputLog(search: string = window.location.search): boolean {
@@ -12,9 +12,19 @@ export function wantsInputLog(search: string = window.location.search): boolean 
 const stamp = (ms: number) => (ms / 1000).toFixed(2);
 
 /**
+ * How long the page took to hear of an event, when that is worth noticing: the readout stamps an event with when the
+ * screen says it happened, so a late one shows here as the gap between that and now. (Anything that is not on the
+ * page's clock, or is that old, is not a delay but a stamp that means something else.)
+ */
+export function heardLate(event: { timeStamp: number }, now: number = performance.now()): string {
+  const ms = now - event.timeStamp;
+  return ms > 30 && ms < 10000 ? ` (heard ${Math.round(ms)}ms late)` : '';
+}
+
+/**
  * A small readout for finding out why a device's taps don't do what they should (open the game with `?input` on the end
  * of the address). It lists every finger that goes down, comes up or is taken away by the browser, where it landed and
- * how many are down, and, indented under them, what the game made of each tap: how early or late it was, or why it was
+ * how many are down, and how late the page heard of it if it was late, and, indented under them, what the game made of each tap: how early or late it was, or why it was
  * ignored, and anything that slowed the game down. It only listens, so it changes nothing about the game.
  */
 export function InputLog() {
@@ -32,7 +42,7 @@ export function InputLog() {
       const at = e.target instanceof Element ? `${e.target.tagName.toLowerCase()}${e.target.classList.length ? '.' + e.target.classList[0] : ''}` : '?';
       const who = e.type.startsWith('touch') ? '' : ` ${p.pointerType} #${p.pointerId} x${Math.round(p.clientX)} y${Math.round(p.clientY)} on ${at}`;
       setDown(fingers.current.size);
-      add(`${stamp(e.timeStamp)} ${kind}${who}`);
+      add(`${stamp(e.timeStamp)} ${kind}${heardLate(e)}${who}`);
     };
     // (Capturing, so nothing on the page can hide an event from it.)
     for (const name of EVENTS) window.addEventListener(name, seen, true);
