@@ -40,7 +40,13 @@ function fakeFirestore() {
   return { docs, sdk, songs };
 }
 
-const sound = (size: number) => Uint8Array.from({ length: size }, (_, i) => i % 251);
+const sound = (size: number) => {
+  const bytes = new Uint8Array(size);
+  for (let i = 0; i < size; i++) bytes[i] = i % 251;
+  return bytes;
+};
+/** (Not `toEqual`: that walks a megabyte of numbers one by one, which is slow enough to time out on a busy machine.) */
+const same = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((value, i) => value === b[i]);
 const blobOf = (bytes: Uint8Array<ArrayBuffer>) => new Blob([bytes], { type: 'audio/mpeg' });
 const chart = fakeChart('a', { savedAt: 500, audio: 'a-1.mp3' });
 
@@ -82,7 +88,7 @@ describe('songs in Firestore', () => {
     const back = await songs.getAudio('a', audio, { progress: (fraction) => progress.push(fraction) });
 
     expect(back.type).toBe('audio/mpeg');
-    expect(new Uint8Array(await back.arrayBuffer())).toEqual(bytes);
+    expect(same(new Uint8Array(await back.arrayBuffer()), bytes)).toBe(true);
     expect(progress[0]).toBe(0);
     expect(progress.at(-1)).toBe(1);
     expect(progress).toEqual([...progress].sort((a, b) => a - b));
