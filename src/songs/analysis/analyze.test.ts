@@ -121,7 +121,7 @@ describe('the analyser on made-up songs', () => {
       let position = 0;
       for (const token of tokensOf(chart)) {
         if (token === 'xx') inQuarter[Math.min(3, Math.trunc(position / quarter))]++;
-        position += token.startsWith('x~') ? Number(token.slice(2)) : token.startsWith('.') && token.length > 1 ? Number(token.slice(1)) : 1;
+        position += token.includes('~') ? Number(token.split('~')[1]) : token.startsWith('.') && token.length > 1 ? Number(token.slice(1)) : 1;
       }
       for (const count of inQuarter) expect(count).toBeGreaterThan(0);
     }, SLOW);
@@ -130,6 +130,55 @@ describe('the analyser on made-up songs', () => {
       for (const density of DENSITIES) {
         const tokens = tokensOf(analyze(songs.b.samples!, { density }));
         for (let i = 1; i < tokens.length; i++) expect(tokens[i] === 'xx' && tokens[i - 1] === 'xx').toBe(false);
+      }
+    }, SLOW);
+  });
+
+  describe('double holds', () => {
+    /** Where each hold and double hold starts (in rows), and how long it is. */
+    const holdsIn = (chart: Measured) => {
+      const found: { double: boolean; row: number; rows: number }[] = [];
+      let position = 0;
+      for (const token of chart.chart.split(/\s+/).filter(Boolean)) {
+        if (token.startsWith('.')) {
+          position += token.length > 1 ? Number(token.slice(1)) : 1;
+          continue;
+        }
+        const rows = token.includes('~') ? Number(token.split('~')[1]) : 1;
+        if (rows > 1) found.push({ double: token.startsWith('xx'), row: position, rows });
+        position += rows;
+      }
+      return found;
+    };
+
+    for (const density of DENSITIES) {
+      it(`turn some of the holds of ${density} into two, and never all of them`, () => {
+        const holds = holdsIn(analyze(songs.b.samples!, { density }));
+        const doubled = holds.filter((hold) => hold.double);
+        expect(holds.length).toBeGreaterThanOrEqual(2);
+        expect(doubled.length).toBeGreaterThanOrEqual(1);
+        expect(doubled.length).toBeLessThan(holds.length);
+        for (const hold of doubled) expect(hold.rows).toBeGreaterThanOrEqual(2);
+      }, SLOW);
+    }
+
+    it('are kept well apart', () => {
+      for (const density of DENSITIES) {
+        const doubled = holdsIn(analyze(songs.b.samples!, { density })).filter((hold) => hold.double);
+        for (let i = 1; i < doubled.length; i++) expect(doubled[i].row - doubled[i - 1].row).toBeGreaterThanOrEqual(16);
+      }
+    }, SLOW);
+
+    it('never have a double on the row before or after them', () => {
+      for (const density of DENSITIES) {
+        const chart = analyze(songs.b.samples!, { density });
+        const tokens = chart.chart.split(/\s+/).filter(Boolean);
+        for (let i = 1; i < tokens.length; i++) {
+          const pair = [tokens[i - 1], tokens[i]];
+          if (pair.some((token) => token.startsWith('xx~'))) {
+            expect(pair.filter((token) => token === 'xx' || token.startsWith('xx~')).length).toBeLessThan(2);
+          }
+        }
       }
     }, SLOW);
   });
@@ -148,7 +197,7 @@ describe('the analyser on made-up songs', () => {
         }
         if (last !== undefined) quickest = Math.min(quickest, (position - last) * row);
         last = position;
-        position += token.startsWith('x~') ? Number(token.slice(2)) : 1;
+        position += token.includes('~') ? Number(token.split('~')[1]) : 1;
       }
       expect(quickest).toBeGreaterThanOrEqual(1 / 4.5 - 1e-6);
     }
@@ -176,7 +225,7 @@ describe('the analyser on made-up songs', () => {
       total++;
       const beats = (chart.offset + position * row - 0.37) / beat;
       if (Math.abs(beats - Math.round(beats)) < 0.1) onBeat++;
-      position += token.startsWith('x~') ? Number(token.slice(2)) : 1;
+      position += token.includes('~') ? Number(token.split('~')[1]) : 1;
     }
     expect(onBeat / total).toBeGreaterThan(0.7);
   }, SLOW);
@@ -206,7 +255,7 @@ describe('the analyser on made-up songs', () => {
       chart.chart
         .split(/\s+/)
         .filter(Boolean)
-        .reduce((sum, token) => sum + (token.startsWith('x~') ? Number(token.slice(2)) : 1), 0);
+        .reduce((sum, token) => sum + (token.includes('~') ? Number(token.split('~')[1]) : 1), 0);
 
     for (const length of LENGTHS) {
       const { min, max } = LENGTH_SECONDS[length];
@@ -270,7 +319,7 @@ describe('the analyser on made-up songs', () => {
       let position = 0;
       for (const token of chart.chart.split(/\s+/).filter(Boolean)) {
         if (token !== '.') out[verse(chart.offset + position / rate) ? 'verse' : 'chorus']++;
-        position += token.startsWith('x~') ? Number(token.slice(2)) : 1;
+        position += token.includes('~') ? Number(token.split('~')[1]) : 1;
       }
       return out;
     }
@@ -301,7 +350,7 @@ describe('the analyser on made-up songs', () => {
       for (const token of chart.chart.split(/\s+/).filter(Boolean)) {
         const time = chart.offset + position / rate;
         if (token !== '.' && time >= 41 && time < 55) inGap++; // (a kick's tail runs a little past the gap's edges)
-        position += token.startsWith('x~') ? Number(token.slice(2)) : 1;
+        position += token.includes('~') ? Number(token.split('~')[1]) : 1;
       }
       expect(inGap).toBe(0);
     }, SLOW);
@@ -313,7 +362,7 @@ describe('the analyser on made-up songs', () => {
     expect(second).toEqual(first);
     expect(first.difficulty).toBeGreaterThanOrEqual(1);
     expect(first.difficulty).toBeLessThanOrEqual(5);
-    expect(first.chart.split(/\s+/).every((token) => /^(x|xx|x~[2-4]|\.)$/.test(token))).toBe(true);
+    expect(first.chart.split(/\s+/).every((token) => /^(x|xx|xx?~[2-4]|\.)$/.test(token))).toBe(true);
   }, SLOW);
 
   it('reports how far along it is, ending at 1', () => {

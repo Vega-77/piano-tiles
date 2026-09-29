@@ -37,6 +37,14 @@ describe('chart notation', () => {
     ]);
   });
 
+  it('reads double holds, with the rows they take', () => {
+    expect(parseChart('xx~ xx~4 x~3')).toEqual([
+      { type: 'doublehold', freqs: [0, 0], rows: 2 },
+      { type: 'doublehold', freqs: [0, 0], rows: 4 },
+      { type: 'hold', freq: 0, rows: 3 },
+    ]);
+  });
+
   it('merges neighbouring rests and reads long ones', () => {
     expect(parseChart('x . . .12 . x')).toEqual([
       { type: 'tap', freq: 0 },
@@ -49,12 +57,12 @@ describe('chart notation', () => {
     expect(parseChart('x .\n x\n\n.')).toHaveLength(4);
   });
 
-  it.each(['y', 'x~1', 'x~5', 'x+x', 'xxx', 'C4', '.x'])('refuses "%s"', (token) => {
+  it.each(['y', 'x~1', 'x~5', 'xx~1', 'xx~5', 'x+x', 'xxx', 'xxx~3', 'C4', '.x'])('refuses "%s"', (token) => {
     expect(() => parseChart(`x ${token}`)).toThrow();
   });
 
   it('writes a chart back out the way it was read', () => {
-    const source = 'x . x . xx . x~3 . x . x . . . x . x . x . x .';
+    const source = 'x . x . xx . x~3 . x . x . . . xx~4 . x . x . x .';
     const beats = parseChart(source);
     expect(parseChart(formatChart(beats))).toEqual(beats);
     expect(formatChart(beats).split('\n').length).toBeGreaterThan(1); // broken into lines to read

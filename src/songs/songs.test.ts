@@ -28,6 +28,11 @@ describe('what the screens say about a song', () => {
     });
   });
 
+  it('counts a double hold as both a double and a hold', () => {
+    const chart = fakeChart('twin', { chart: 'x . xx~3 . .', duration: 4 });
+    expect(songFeatures(songFromChart(chart, folder))).toEqual({ doubles: true, holds: true });
+  });
+
   it('names every difficulty from 1 to 5', () => {
     expect(Object.keys(DIFFICULTY_LABELS)).toEqual(['1', '2', '3', '4', '5']);
     expect(DIFFICULTY_LABELS[3]).toBe('Medium');

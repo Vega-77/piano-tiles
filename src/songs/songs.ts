@@ -29,7 +29,7 @@ export function songSeconds(song: Song): number {
 
 export function songFeatures(song: Song): { doubles: boolean; holds: boolean } {
   return {
-    doubles: song.beats.some((beat) => beat.type === 'double'),
-    holds: song.beats.some((beat) => beat.type === 'hold'),
+    doubles: song.beats.some((beat) => beat.type === 'double' || beat.type === 'doublehold'),
+    holds: song.beats.some((beat) => beat.type === 'hold' || beat.type === 'doublehold'),
   };
 }

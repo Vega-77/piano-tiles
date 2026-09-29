@@ -25,8 +25,8 @@ export const LAP_REST_SECONDS = 1.5;
 export const COUNT_IN_BEATS = 4;
 
 // Timing windows: seconds either side of the moment a tile is centred on the bar.
-export const PERFECT_WINDOW = 0.075;
-export const GOOD_WINDOW = 0.15;
+export const PERFECT_WINDOW = 0.1;
+export const GOOD_WINDOW = 0.18;
 /**
  * The furthest a tap may be from the bar and still count. Tap earlier than this and the tile
  * doesn't line up with the bar: the game ends. Leave a tile later than this and it's missed.
@@ -42,8 +42,11 @@ export const POINTS = { perfect: 100, good: 60, ok: 25 } as const;
  */
 export const HOLD_TICK_POINTS = 10;
 
-/** Every COMBO_STEP perfects in a row raises the points multiplier by one... */
-export const COMBO_STEP = 8;
+/**
+ * Every COMBO_STEP perfects in a row raises the points multiplier by one... A good hit keeps the
+ * chain going without adding to it; anything less breaks it.
+ */
+export const COMBO_STEP = 5;
 /** ...up to this cap. */
 export const COMBO_MAX_MULTIPLIER = 8;
 

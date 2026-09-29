@@ -568,7 +568,8 @@ export class GameEngine {
     const multiplier = comboMultiplier(this.combo);
     const points = POINTS[judgment] * multiplier;
 
-    this.combo = judgment === 'perfect' ? this.combo + 1 : 0;
+    // A perfect adds to the chain, a good hit keeps what it has, anything less breaks it.
+    this.combo = judgment === 'perfect' ? this.combo + 1 : judgment === 'good' ? this.combo : 0;
     this.stats[judgment]++;
     this.stats.tiles++;
     this.stats.maxChain = Math.max(this.stats.maxChain, this.combo);
@@ -589,8 +590,8 @@ export class GameEngine {
 
     const x = laneCenter(tile.lane);
     this.effects.hit(x, headCenter(tile), tile.lane, judgment);
-    const direction = judgment === 'perfect' ? '' : ` ${early ? 'EARLY' : 'LATE'}`;
-    this.effects.popup(JUDGMENT_LABEL[judgment], x, BAR_Y - 14, { sub: `+${points}${direction}`, judgment });
+    const timing = judgment === 'perfect' ? undefined : early ? 'early' : 'late';
+    this.effects.popup(JUDGMENT_LABEL[judgment], x, BAR_Y - 14, { sub: `+${points}`, judgment, timing });
     if (comboMultiplier(this.combo) > multiplier) {
       this.effects.popup(`×${comboMultiplier(this.combo)}`, 50, 46, { sub: 'CHAIN', judgment: 'perfect' });
       this.effects.setEnergy(this.energy());
@@ -779,11 +780,14 @@ export class GameEngine {
     const time = timeline.arrival(lap, row);
 
     if (spec.type === 'rest') return false;
-    if (spec.type === 'double') {
-      // Exactly one lane between the two tiles: lanes 0 & 2, or 1 & 3.
+    if (spec.type === 'double' || spec.type === 'doublehold') {
+      // Exactly one lane between the two tiles: lanes 0 & 2, or 1 & 3. A double hold is two holds side by side.
       const lanes = Math.random() < 0.5 ? [0, 2] : [1, 3];
+      const held = spec.type === 'doublehold';
+      const rows = held ? spec.rows : 1;
+      const end = held ? time + (rows - 0.5) / timeline.rate(lap) : time;
       lanes.forEach((lane, i) =>
-        this.addTile({ beat, lane, rows: 1, kind: 'tap', freq: spec.freqs[i], start, time, end: time }, i === 0),
+        this.addTile({ beat, lane, rows, kind: held ? 'hold' : 'tap', freq: spec.freqs[i], start, time, end }, i === 0),
       );
       return true;
     }

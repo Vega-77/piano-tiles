@@ -37,6 +37,17 @@ describe('buildTrack', () => {
     expect(byKind(track[5], 'melody')).toHaveLength(2);
   });
 
+  it('rings both notes of a double hold for most of its length', () => {
+    const track = buildTrack(parseBeats('C4+E4~3 . D4'));
+    expect(track).toHaveLength(5);
+    expect(track[0]).toEqual([
+      { kind: 'melody', freq: noteToFrequency('C4'), rows: 2.6 },
+      { kind: 'melody', freq: noteToFrequency('E4'), rows: 2.6 },
+    ]);
+    expect(track[1]).toEqual([]);
+    expect(byKind(track[4], 'melody')).toHaveLength(1);
+  });
+
   describe('with an arrangement', () => {
     const groove: Groove = { kick: 'x...', snare: '..o.', hat: 'xoxo', bass: '1.5.', chord: '.x..', pad: true };
     const track = buildTrack(parseBeats('C4 D4 E4 F4 | G4 A4 B4 C5'), {

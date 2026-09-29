@@ -36,11 +36,24 @@ describe('parseBeats', () => {
     expect(parseBeats('  C4 |\n D4  ')).toHaveLength(2);
   });
 
-  it('rejects bad tokens, holds outside 2-4 rows, and doubles that hold', () => {
+  it('parses double holds with both pitches and their rows', () => {
+    const beats = parseBeats('C4+E4~3 G4+B4~ D4');
+    expect(beats.map((b) => b.type)).toEqual(['doublehold', 'doublehold', 'tap']);
+    const [first, second] = beats;
+    if (first.type !== 'doublehold' || second.type !== 'doublehold') throw new Error('expected double holds');
+    expect(first.rows).toBe(3);
+    expect(first.freqs[0]).toBeCloseTo(noteToFrequency('C4'), 5);
+    expect(first.freqs[1]).toBeCloseTo(noteToFrequency('E4'), 5);
+    expect(second.rows).toBe(2);
+    expect(beatRows(first)).toBe(3);
+  });
+
+  it('rejects bad tokens and holds outside 2-4 rows, single or double', () => {
     expect(() => parseBeats('C4 X9')).toThrow(/Invalid token/);
     expect(() => parseBeats('C4~1')).toThrow(/rows/);
     expect(() => parseBeats('C4~5')).toThrow(/rows/);
-    expect(() => parseBeats('C4+E4~2')).toThrow();
+    expect(() => parseBeats('C4+E4~1')).toThrow(/rows/);
+    expect(() => parseBeats('C4+E4~5')).toThrow(/rows/);
     expect(() => parseBeats('..')).toThrow();
   });
 });

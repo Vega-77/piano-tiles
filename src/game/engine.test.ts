@@ -73,6 +73,7 @@ const START = 100; // song time when the game starts
 const tap = (freq = 440): BeatSpec => ({ type: 'tap', freq });
 const double = (): BeatSpec => ({ type: 'double', freqs: [440, 550] });
 const hold = (rows: number): BeatSpec => ({ type: 'hold', freq: 330, rows });
+const doubleHold = (rows: number): BeatSpec => ({ type: 'doublehold', freqs: [440, 550], rows });
 const rest = (rows = 1): BeatSpec => ({ type: 'rest', rows });
 /** A realistic-length song. (A one-beat song would have a one-row lap, and laps shrink geometrically.) */
 const manyTaps = (count: number): BeatSpec[] => Array.from({ length: count }, () => tap());
@@ -454,8 +455,11 @@ describe('timing judgments', () => {
   it.each([
     [0, 'perfect', POINTS.perfect],
     [0.06, 'perfect', POINTS.perfect],
+    [0.095, 'perfect', POINTS.perfect],
+    [-0.095, 'perfect', POINTS.perfect],
     [-0.06, 'perfect', POINTS.perfect],
     [-0.12, 'good', POINTS.good],
+    [0.17, 'good', POINTS.good],
     [0.14, 'good', POINTS.good],
     [-0.22, 'ok', POINTS.ok],
     [0.22, 'ok', POINTS.ok],
@@ -465,6 +469,33 @@ describe('timing judgments', () => {
     expect(engine.getState().status).toBe('playing');
     expect(engine.getState().score).toBe(points);
     expect(engine.getState().combo).toBe(judgment === 'perfect' ? 1 : 0);
+  });
+
+  describe('the popup', () => {
+    /** Taps the first tile `offset` seconds off the bar and returns what the effects were asked to show. */
+    function popupFor(offset: number) {
+      const popups: { text: string; options?: Parameters<Fx['popup']>[3] }[] = [];
+      const effects: Fx = { ...noopFx, popup: (text, _x, _y, options) => popups.push({ text, options }) };
+      const { engine } = setup([tap(), tap()], { effects });
+      tapAt(engine, firstTile(engine), offset);
+      return must(popups.at(-1));
+    }
+
+    it('says nothing of timing for a perfect hit', () => {
+      const { options } = popupFor(0.05);
+      expect(options).toMatchObject({ judgment: 'perfect', sub: `+${POINTS.perfect}` });
+      expect(options?.timing).toBeUndefined();
+    });
+
+    it.each([
+      [-0.14, 'good', 'early'],
+      [0.14, 'good', 'late'],
+      [-0.22, 'ok', 'early'],
+      [0.22, 'ok', 'late'],
+    ] as const)('marks a tap %ss from the bar as %s and %s', (offset, judgment, timing) => {
+      const { options } = popupFor(offset);
+      expect(options).toMatchObject({ judgment, timing, sub: `+${POINTS[judgment]}` });
+    });
   });
 
   it('ends the game if a tile is tapped too early to line up with the bar', () => {
@@ -497,7 +528,7 @@ describe('timing judgments', () => {
   it('counts each judgment in the final stats', () => {
     const { engine, results } = setup([tap(), tap(), tap(), tap()]);
     tapAt(engine, firstTile(engine), 0); // perfect
-    tapAt(engine, must(engine.getTiles().find((t) => t.beat === 1)), 0.1); // good
+    tapAt(engine, must(engine.getTiles().find((t) => t.beat === 1)), 0.14); // good
     tapAt(engine, must(engine.getTiles().find((t) => t.beat === 2)), -0.2); // ok
     goTo(must(engine.getTiles().find((t) => t.beat === 3)).time + OK_WINDOW + 0.05); // miss the last
     expect(engine.getState().status).toBe('gameover');
@@ -518,15 +549,36 @@ describe('chains of perfects', () => {
     expect(states.find((s) => s.combo === COMBO_STEP - 1)?.comboMultiplier).toBe(1);
   });
 
-  it('are broken by any hit that is not perfect', () => {
+  it('step up every few perfects, so the first raise comes early', () => {
+    expect(COMBO_STEP).toBeLessThanOrEqual(5);
+    expect(comboMultiplier(COMBO_STEP - 1)).toBe(1);
+    expect(comboMultiplier(COMBO_STEP)).toBe(2);
+  });
+
+  it('are kept, but not added to, by a good hit', () => {
     const { engine } = setup(manyTaps(80));
     playPerfectly(engine, () => engine.getState().combo >= COMBO_STEP + 1);
     expect(engine.getState().comboMultiplier).toBe(2);
     const scoreBefore = engine.getState().score;
 
-    tapAt(engine, nextBeat(engine)[0], 0.1); // merely good
+    tapAt(engine, nextBeat(engine)[0], 0.14); // merely good
+    expect(engine.getState()).toMatchObject({ combo: COMBO_STEP + 1, comboMultiplier: 2 });
+    expect(engine.getState().score - scoreBefore).toBe(POINTS.good * 2);
+    const after = engine.getState().score;
+    tapAt(engine, nextBeat(engine)[0], 0);
+    expect(engine.getState().combo).toBe(COMBO_STEP + 2);
+    expect(engine.getState().score - after).toBe(POINTS.perfect * 2);
+  });
+
+  it('are broken by a hit that is only ok', () => {
+    const { engine } = setup(manyTaps(80));
+    playPerfectly(engine, () => engine.getState().combo >= COMBO_STEP + 1);
+    expect(engine.getState().comboMultiplier).toBe(2);
+    const scoreBefore = engine.getState().score;
+
+    tapAt(engine, nextBeat(engine)[0], -0.22); // ok
     expect(engine.getState()).toMatchObject({ combo: 0, comboMultiplier: 1 });
-    expect(engine.getState().score - scoreBefore).toBe(POINTS.good * 2); // still earned at the old multiplier
+    expect(engine.getState().score - scoreBefore).toBe(POINTS.ok * 2); // still earned at the old multiplier
     const after = engine.getState().score;
     tapAt(engine, nextBeat(engine)[0], 0);
     expect(engine.getState().score - after).toBe(POINTS.perfect);
@@ -616,7 +668,7 @@ describe('double tiles', () => {
     expect(engine.getState().score).toBe(POINTS.perfect);
     expect(nextBeat(engine).map((t) => t.id)).toContain(left.id);
 
-    tapAt(engine, left, 0.1);
+    tapAt(engine, left, 0.14);
     expect(engine.getState().score).toBe(POINTS.perfect + POINTS.good);
     expect(nextBeat(engine)[0].beat).toBe(left.beat + 1);
   });
@@ -644,6 +696,78 @@ describe('double tiles', () => {
     expect(engine.getState()).toMatchObject({ status: 'playing', score: POINTS.perfect });
     engine.press(right.lane, 'p2');
     expect(engine.getState().score).toBe(POINTS.perfect * 2);
+  });
+});
+
+describe('double holds', () => {
+  function setupDoubleHold(rows = 3) {
+    const context = setup([doubleHold(rows), tap(), tap()]);
+    const [left, right] = context.engine.getTiles();
+    return { ...context, left, right, spacing: 0.5 / context.rate };
+  }
+
+  it('lay two hold tiles in one row, one lane apart, each as tall as the hold is long', () => {
+    for (let i = 0; i < 20; i++) {
+      const { engine, left, right, t0, rate } = setupDoubleHold(3);
+      expect(engine.getTiles().filter((t) => t.beat === 0)).toHaveLength(2);
+      expect(right.lane - left.lane).toBe(2);
+      expect([0, 1]).toContain(left.lane);
+      expect([left.rows, right.rows]).toEqual([3, 3]);
+      expect(left.time).toBe(right.time);
+      expect([left.freq, right.freq]).toEqual([440, 550]);
+      for (const tile of [left, right]) {
+        expect(tile.hold?.totalTicks).toBe(5);
+        expect(must(tile.hold).end).toBeCloseTo(t0 + 2.5 / rate, 9);
+      }
+    }
+  });
+
+  it('are held with two fingers, each tile graded on its own and paying its own ticks', () => {
+    const { engine, left, right } = setupDoubleHold();
+    tapAt(engine, left, -0.14, 'p1'); // good
+    expect(engine.getState().score).toBe(POINTS.good);
+    tapAt(engine, right, 0, 'p2'); // perfect
+    expect(engine.getState().score).toBe(POINTS.good + POINTS.perfect);
+    expect(left.hold?.phase).toBe('holding');
+    expect(right.hold?.phase).toBe('holding');
+
+    goTo(must(left.hold).end);
+    expect(left.hold?.phase).toBe('done');
+    expect(right.hold?.phase).toBe('done');
+    // Both fingers stayed down to the end, so both paid every tick: the early one is held longer than it is due.
+    expect(engine.getState().score).toBe(POINTS.good + POINTS.perfect + 2 * 5 * HOLD_TICK_POINTS);
+    expect(engine.getState().status).toBe('playing');
+    expect(nextBeat(engine)[0].beat).toBe(1);
+  });
+
+  it('can have one finger lifted while the other keeps paying', () => {
+    const { engine, left, right, t0, spacing } = setupDoubleHold();
+    tapAt(engine, left, 0, 'p1');
+    tapAt(engine, right, 0, 'p2');
+    goTo(t0 + spacing * 2 + 0.05);
+    engine.release('p1');
+    expect(engine.getState().status).toBe('playing');
+    expect(left.hold?.phase).not.toBe('holding');
+    expect(right.hold?.phase).toBe('holding');
+
+    goTo(must(right.hold).end);
+    expect(right.hold?.phase).toBe('done');
+    expect(engine.getState().score).toBe(2 * POINTS.perfect + (2 + 5) * HOLD_TICK_POINTS);
+    expect(engine.getState().status).toBe('playing');
+  });
+
+  it('are missed if one of the two is never pressed', () => {
+    const { engine, left, t0 } = setupDoubleHold();
+    tapAt(engine, left, 0);
+    goTo(t0 + OK_WINDOW + 0.05);
+    expect(engine.getState().status).toBe('gameover');
+  });
+
+  it('end the game when the lane between the pair is tapped', () => {
+    const { engine, left } = setupDoubleHold();
+    goTo(left.time);
+    engine.press(left.lane + 1, 'p1');
+    expect(engine.getState().status).toBe('gameover');
   });
 });
 

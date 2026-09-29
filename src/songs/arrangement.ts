@@ -47,6 +47,9 @@ export function buildTrack(beats: readonly BeatSpec[], arrangement?: Arrangement
     else if (beat.type === 'double') for (const freq of beat.freqs) track[row].push({ kind: 'melody', freq });
     // A hold rings for most of its length.
     else if (beat.type === 'hold') track[row].push({ kind: 'melody', freq: beat.freq, rows: beat.rows - 0.4 });
+    else if (beat.type === 'doublehold') {
+      for (const freq of beat.freqs) track[row].push({ kind: 'melody', freq, rows: beat.rows - 0.4 });
+    }
     row += beatRows(beat);
   }
   if (!arrangement) return track;

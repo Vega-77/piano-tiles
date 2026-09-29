@@ -111,7 +111,8 @@ body {
   /* Doubles: a glowing bar joins the pair across the lane between them. */
   .tile-link {
     position: absolute;
-    top: 50%;
+    /* Across the middle of the head: the bottom row, which is the whole tile unless it is a hold. */
+    top: calc(100% - 50% / var(--rows, 1));
     left: 50%;
     width: 200%;
     height: 8px;

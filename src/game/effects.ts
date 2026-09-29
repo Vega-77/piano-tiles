@@ -17,7 +17,8 @@ export interface Fx {
   setBar(bar: BarZone | null): void;
   /** A tile was tapped: its head is at (x, y), both percent of board size. */
   hit(x: number, y: number, lane: number, judgment: Judgment): void;
-  popup(text: string, x: number, y: number, options?: { sub?: string; judgment?: Judgment }): void;
+  /** Text that floats up from (x, y); `timing` adds a coloured EARLY / LATE tag between the text and `sub`. */
+  popup(text: string, x: number, y: number, options?: { sub?: string; judgment?: Judgment; timing?: 'early' | 'late' }): void;
   /** Big centred text that fades out, e.g. "Get ready" or "Lap 2". */
   banner(text: string, sub?: string): void;
   /** One big count-in number ("4", "3", …) that pops and fades; a new one replaces the last. */
@@ -61,7 +62,7 @@ const BLOBS = [
 
 interface Particle { x: number; y: number; vx: number; vy: number; age: number; life: number; size: number; hue: number }
 interface Ripple { x: number; y: number; age: number; hue: number }
-interface Popup { text: string; sub: string; x: number; y: number; age: number; hue: number }
+interface Popup { text: string; sub: string; timing: 'early' | 'late' | null; x: number; y: number; age: number; hue: number }
 interface Banner { text: string; sub: string; age: number }
 interface Countdown { text: string; age: number }
 interface Star { x: number; y: number; z: number; phase: number }
@@ -171,10 +172,10 @@ export class Effects implements Fx {
     this.pulse(judgment === 'perfect' ? 0.4 : 0.2);
   }
 
-  popup(text: string, x: number, y: number, options: { sub?: string; judgment?: Judgment } = {}): void {
+  popup(text: string, x: number, y: number, options: { sub?: string; judgment?: Judgment; timing?: 'early' | 'late' } = {}): void {
     const { width, height } = this.fxSize();
     const hue = options.judgment === undefined ? this.hue : options.judgment === 'good' ? this.hue : JUDGMENT_HUE[options.judgment];
-    this.popups.push({ text, sub: options.sub ?? '', x: (x / 100) * width, y: (y / 100) * height, age: 0, hue });
+    this.popups.push({ text, sub: options.sub ?? '', timing: options.timing ?? null, x: (x / 100) * width, y: (y / 100) * height, age: 0, hue });
   }
 
   banner(text: string, sub = ''): void {
@@ -384,11 +385,26 @@ export class Effects implements Fx {
       ctx.strokeText(p.text, 0, 0);
       ctx.fillStyle = `hsl(${p.hue} 100% 82%)`;
       ctx.fillText(p.text, 0, 0);
+      let next = 19;
+      if (p.timing) {
+        // A small coloured pill, blue for a tap before the bar and orange for one after it.
+        const label = p.timing === 'early' ? 'EARLY' : 'LATE';
+        ctx.font = '900 13px ui-sans-serif, system-ui, sans-serif';
+        const half = ctx.measureText(label).width / 2 + 8;
+        ctx.fillStyle = p.timing === 'early' ? 'hsl(205 95% 62%)' : 'hsl(24 100% 58%)';
+        ctx.beginPath();
+        if (typeof ctx.roundRect === 'function') ctx.roundRect(-half, 8, half * 2, 19, 9.5);
+        else ctx.rect(-half, 8, half * 2, 19);
+        ctx.fill();
+        ctx.fillStyle = 'hsl(0 0% 6%)';
+        ctx.fillText(label, 0, 22.5);
+        next = 44;
+      }
       if (p.sub) {
         ctx.font = '800 14px ui-sans-serif, system-ui, sans-serif';
-        ctx.strokeText(p.sub, 0, 19);
+        ctx.strokeText(p.sub, 0, next);
         ctx.fillStyle = 'hsl(0 0% 100%)';
-        ctx.fillText(p.sub, 0, 19);
+        ctx.fillText(p.sub, 0, next);
       }
       ctx.restore();
     }

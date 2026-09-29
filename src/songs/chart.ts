@@ -81,6 +81,7 @@ const NO_PITCH = 0;
 const TAP = /^x$/;
 const DOUBLE = /^xx$/;
 const HOLD = /^x~(\d)?$/;
+const DOUBLE_HOLD = /^xx~(\d)?$/;
 const REST = /^\.(\d+)?$/;
 
 function parseToken(token: string): BeatSpec {
@@ -88,12 +89,13 @@ function parseToken(token: string): BeatSpec {
   if (rest) return { type: 'rest', rows: rest[1] ? Number(rest[1]) : 1 };
   if (TAP.test(token)) return { type: 'tap', freq: NO_PITCH };
   if (DOUBLE.test(token)) return { type: 'double', freqs: [NO_PITCH, NO_PITCH] };
-  const hold = HOLD.exec(token);
+  const hold = HOLD.exec(token) ?? DOUBLE_HOLD.exec(token);
   if (hold) {
     const rows = hold[1] ? Number(hold[1]) : MIN_HOLD_ROWS;
     if (rows < MIN_HOLD_ROWS || rows > MAX_HOLD_ROWS) {
       throw new Error(`Hold "${token}" must be ${MIN_HOLD_ROWS}–${MAX_HOLD_ROWS} rows long`);
     }
+    if (token.startsWith('xx')) return { type: 'doublehold', freqs: [NO_PITCH, NO_PITCH], rows };
     return { type: 'hold', freq: NO_PITCH, rows };
   }
   throw new Error(`Invalid chart token "${token}"`);
@@ -105,6 +107,7 @@ function parseToken(token: string): BeatSpec {
  *   xx      a double: two tiles at once, one lane apart
  *   x~      a hold tile, 2 rows tall
  *   x~3     a hold tile, 3 rows tall (2–4 allowed)
+ *   xx~     a double hold: two hold tiles at once, one lane apart (xx~3 for 3 rows)
  *   .       a rest: one row with nothing to tap
  *   .12     a rest twelve rows long
  * Neighbouring rests are merged.
@@ -134,6 +137,7 @@ export function formatChart(beats: readonly BeatSpec[], bar = 8): string {
       beat.type === 'tap' ? 'x'
       : beat.type === 'double' ? 'xx'
       : beat.type === 'hold' ? `x~${beat.rows}`
+      : beat.type === 'doublehold' ? `xx~${beat.rows}`
       : '.';
     const size = beatRows(beat);
     for (let i = 0; i < (beat.type === 'rest' ? beat.rows : 1); i++) line.push(token);

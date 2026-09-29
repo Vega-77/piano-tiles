@@ -20,9 +20,9 @@ function SongCover({ song }: { song: Song }) {
     const beat = song.beats[i];
     const rows = beatRows(beat);
     const top = bottom - rows;
-    if (beat.type === 'double') {
+    if (beat.type === 'double' || beat.type === 'doublehold') {
       const lanes = i % 2 ? [1, 3] : [0, 2];
-      for (const lane of lanes) cells.push({ key: `${i}-${lane}`, lane, top, rows: 1, hold: false });
+      for (const lane of lanes) cells.push({ key: `${i}-${lane}`, lane, top, rows, hold: beat.type === 'doublehold' });
     } else if (beat.type !== 'rest') {
       cells.push({ key: String(i), lane: (i * 3 + 1) % 4, top, rows, hold: beat.type === 'hold' });
     }

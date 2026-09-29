@@ -18,12 +18,12 @@ export function noteToFrequency(note: string): number {
 }
 
 const NOTE = '[A-G]#?\\d';
-const TOKEN = new RegExp(`^(${NOTE})(?:\\+(${NOTE})|~(\\d)?)?$`);
+const TOKEN = new RegExp(`^(${NOTE})(?:\\+(${NOTE}))?(~(\\d)?)?$`);
 const REST = /^\.(\d)?$/;
 
 /** How many rows of the song a beat takes up. */
 export function beatRows(beat: BeatSpec): number {
-  return beat.type === 'hold' || beat.type === 'rest' ? beat.rows : 1;
+  return beat.type === 'hold' || beat.type === 'doublehold' || beat.type === 'rest' ? beat.rows : 1;
 }
 
 function parseToken(token: string): BeatSpec {
@@ -32,16 +32,17 @@ function parseToken(token: string): BeatSpec {
 
   const match = TOKEN.exec(token);
   if (!match) throw new Error(`Invalid token "${token}"`);
-  const [, note, partner, rowsText] = match;
+  const [, note, partner, held, rowsText] = match;
 
-  if (partner) return { type: 'double', freqs: [noteToFrequency(note), noteToFrequency(partner)] };
-  if (token.includes('~')) {
+  if (held) {
     const rows = rowsText ? Number(rowsText) : MIN_HOLD_ROWS;
     if (rows < MIN_HOLD_ROWS || rows > MAX_HOLD_ROWS) {
       throw new Error(`Hold "${token}" must be ${MIN_HOLD_ROWS}–${MAX_HOLD_ROWS} rows long`);
     }
+    if (partner) return { type: 'doublehold', freqs: [noteToFrequency(note), noteToFrequency(partner)], rows };
     return { type: 'hold', freq: noteToFrequency(note), rows };
   }
+  if (partner) return { type: 'double', freqs: [noteToFrequency(note), noteToFrequency(partner)] };
   return { type: 'tap', freq: noteToFrequency(note) };
 }
 
@@ -52,6 +53,7 @@ function parseToken(token: string): BeatSpec {
  *   C4+E4     a double: two tiles at once, one lane apart (plays both notes)
  *   G4~       a hold tile, 2 rows tall
  *   G4~3      a hold tile, 3 rows tall (2–4 allowed)
+ *   C4+E4~3   a double hold: two hold tiles at once, one lane apart
  *   .         a rest: one row with nothing to tap
  *   .3        a rest three rows long
  * Returns one array of beats per bar.

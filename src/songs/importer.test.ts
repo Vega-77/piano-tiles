@@ -284,7 +284,7 @@ describe('changing a saved song', () => {
     const wholeAgain = await rechartSong(chart.id, { length: 'long' }, {}, whole.tools);
     expect(wholeAgain.end).toBeUndefined();
     expect((await saved(whole.store, chart.id)).end).toBeUndefined();
-  });
+  }, 30_000); // (three songs of 200 s of audio: close to the default 5 s on a busy machine)
 
   it('says so when the song or its audio is gone', async () => {
     const { store, tools, chart } = await withSong();

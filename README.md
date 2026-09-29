@@ -36,16 +36,18 @@ The glowing bar is where the **middle of each tile** should be when you tap it. 
 
 | Tap | Points |
 | --- | --- |
-| **Perfect** (within 75 ms of the bar) | 100 |
-| **Good** (within 150 ms), early or late | 60 |
+| **Perfect** (within 100 ms of the bar) | 100 |
+| **Good** (within 180 ms), early or late | 60 |
 | **OK** (within 250 ms), early or late | 25 |
 | **Further off than that** | The tile doesn't line up with the bar: **game over** |
+
+A Good or OK hit also shows a coloured tag under its name, **blue EARLY** or **orange LATE**, so you can tell which way you missed; a perfect hit has none.
 
 Timing is measured in seconds, not pixels, so the windows stay fair however fast the tiles fall. The bar's zones grow as the tiles speed up so they always show what the windows actually are. Tapping before the next tile has scrolled into view is simply ignored.
 
 ### Chains
 
-Each perfect extends your **chain**; anything less resets it to zero. Every 8 perfects in a row adds 1 to the points multiplier, up to ×8, and the multiplier applies to every point you score after that. The chain shows under the score.
+Each perfect extends your **chain**. A good hit keeps the chain going without adding to it; a hit that is only OK resets it to zero. Every 5 perfects in a row adds 1 to the points multiplier, up to ×8, and the multiplier applies to every point you score after that. The chain shows under the score.
 
 ### The music
 
@@ -66,6 +68,7 @@ Every song opens at a brisk tempo of its own. Each time the song finishes a lap,
 | **Tap** | Tap it as it lines up with the bar. |
 | **Double** | Two tiles in the same row, exactly one lane apart (lanes 1 & 3, or 2 & 4), joined by a glowing bar. Tap both, in either order; each is graded on its own. Common at every level: up to about one tile in eight on Easy, one in five on Medium and more than one in four on Hard. |
 | **Hold** (gold, 2–4 rows tall) | Press as its head lines up with the bar (graded like a tap) and keep holding. It pays out a tick every half row for as long as you hold, worth more the longer it is. **Letting go early never ends the game**: you just stop earning ticks. Tapping the next tile also lets go of the hold. |
+| **Double hold** | Two holds in the same row, one lane apart, joined by the glowing bar at their heads. Press both heads (each is graded on its own) and keep both down; each pays its own ticks, and lifting one finger early only stops that one. Rarer than the other tiles: about a quarter to two-fifths of a song's holds, never two within 16 rows. |
 
 Best score, best chain and most laps are saved per song in `localStorage`.
 
@@ -106,7 +109,7 @@ It runs on Firebase's **free Spark plan**, using only **Authentication (Google)*
 
 The analyser finds the tempo and where the first beat falls, then puts the tiles on a fixed grid from there. It looks for sudden jumps in the sound (it doesn't tell instruments apart) and puts a tile on the strongest hits that fall on the grid, keeping a gap between tiles and leaving rests where the music is quiet.
 
-The tiles are spread with a **quota per stretch of music**: every eight beats gets a share of the tiles (about 60% of what the difficulty allows, taken from that stretch's own strongest hits), and only what is left over goes to the loudest hits anywhere. That is what keeps a quiet verse from being emptied out by a loud chorus, while a truly silent stretch (a break, a fade) still gets none. A chorus still ends up busier than a verse, because it has more strong hits to choose from. Hits that land on the beat are slightly preferred. A hit followed by sustained sound with nothing struck over it becomes a hold. Doubles go on the hardest hits, where the low, middle and high of the sound all land together, and they are handed out through the song a stretch at a time (the same eight-beat stretches as the quota), so they turn up in every part of it rather than only in the loudest. They are capped at 12 % of the tiles on Easy, 20 % on Medium and 28 % on Hard, and never fall on two rows in a row. It does not transcribe the melody, so the tiles follow the *rhythm* rather than the notes.
+The tiles are spread with a **quota per stretch of music**: every eight beats gets a share of the tiles (about 60% of what the difficulty allows, taken from that stretch's own strongest hits), and only what is left over goes to the loudest hits anywhere. That is what keeps a quiet verse from being emptied out by a loud chorus, while a truly silent stretch (a break, a fade) still gets none. A chorus still ends up busier than a verse, because it has more strong hits to choose from. Hits that land on the beat are slightly preferred. A hit followed by sustained sound with nothing struck over it becomes a hold, and on the hits the most of the sound agrees on, some of the holds (25 % on Easy, 30 % on Medium, 40 % on Hard, at least one when there are two or more) become double holds, kept 16 rows apart. Doubles go on the hardest hits, where the low, middle and high of the sound all land together, and they are handed out through the song a stretch at a time (the same eight-beat stretches as the quota), so they turn up in every part of it rather than only in the loudest. They are capped at 12 % of the tiles on Easy, 20 % on Medium and 28 % on Hard, and never fall on two rows in a row. It does not transcribe the melody, so the tiles follow the *rhythm* rather than the notes.
 
 The first row is placed on a beat, not wherever the recording happens to begin, so the count-in ticks and the lap's first tile share the song's pulse.
 
@@ -122,7 +125,7 @@ Every added song has a **Tune** screen of its own, opened with **Tune this song*
 | --- | --- |
 | **Sync** slider (±250 ms) + **Save** | The tiles reach the bar a little before or after the beat you hear. Bluetooth speakers and headphones add delay of their own, so this is often the first thing to try. |
 | **Tempo** | The tiles drift away from the music, or the detected tempo is half or double the real one. Type the right BPM, then **Re-chart**. **Find the tempo again** goes back to automatic. |
-| **Easy / Medium / Hard** + **Re-chart** | There are too many or too few tiles. Easy leaves a free row between tiles and has doubles now and then; Medium and Hard allow tiles in neighbouring rows, with Hard the fullest and the most doubles. **Re-chart** is always available, so you can also use it to lay the tiles out again with the latest analyser without changing anything else. A song keeps the tiles it has until you re-chart it, so songs added before the levels moved up one, or before doubles, lengths and the beat-aligned start, keep their old tiles until then. |
+| **Easy / Medium / Hard** + **Re-chart** | There are too many or too few tiles. Easy leaves a free row between tiles and has doubles now and then; Medium and Hard allow tiles in neighbouring rows, with Hard the fullest and the most doubles. **Re-chart** is always available, so you can also use it to lay the tiles out again with the latest analyser without changing anything else. A song keeps the tiles it has until you re-chart it, so songs added before the levels moved up one, or before doubles, double holds, lengths and the beat-aligned start, keep their old tiles until then. |
 | **Short / Medium / Long** + **Re-chart** | The lap is too short or too long. Each is a range (60–70 s, 70–80 s, 80–90 s); a longer song is stopped at the best bar line inside it (see [Where a long song stops](#how-the-tiles-are-placed)). The screen says where this song would stop. Songs added before lengths existed play in full until re-charted. |
 | **Name** + **Save** | To rename it. |
 | **Save song file** | To take the song to another device, or keep a backup. |

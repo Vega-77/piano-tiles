@@ -25,13 +25,18 @@ interface Settings {
   /** At most this share of the tiles is a double / a hold. */
   doubles: number;
   holds: number;
+  /** This share of the holds is turned into a double hold (at least one, if there are two holds). */
+  doubleHolds: number;
 }
 
 export const DENSITY: Record<Density, Settings> = {
-  easy: { gap: 2, fraction: 0.4, doubles: 0.12, holds: 0.12 },
-  medium: { gap: 1, fraction: 0.52, doubles: 0.2, holds: 0.1 },
-  hard: { gap: 1, fraction: 0.66, doubles: 0.28, holds: 0.1 },
+  easy: { gap: 2, fraction: 0.4, doubles: 0.12, holds: 0.12, doubleHolds: 0.25 },
+  medium: { gap: 1, fraction: 0.52, doubles: 0.2, holds: 0.1, doubleHolds: 0.3 },
+  hard: { gap: 1, fraction: 0.66, doubles: 0.28, holds: 0.1, doubleHolds: 0.4 },
 };
+
+/** Fewest rows between two double holds: one is a lot to ask, and they are best not to come in a run. */
+const DOUBLE_HOLD_SPACING = 16;
 
 /** Taps per second no chart is allowed to ask for. */
 const MAX_TAP_RATE = 4.5;
@@ -56,7 +61,7 @@ const AUDIBLE = 0.15;
 /** How much more a hit on the beat is worth than one between beats when the two compete for a tile. */
 const BEAT_BONUS = 1.2;
 
-export type TileKind = 'tap' | 'double' | 'hold';
+export type TileKind = 'tap' | 'double' | 'hold' | 'doublehold';
 export interface Tile {
   kind: TileKind;
   rows: number;
@@ -232,13 +237,28 @@ export function chooseTiles(features: Features, grid: Grid, rows: number, level:
   let lastHold = -100;
   const holdCap = Math.trunc(settings.holds * chosen.length);
   const ranked = chosen.map((k) => ({ k, ...sustain(k) })).sort((a, b) => b.level - a.level);
+  const held: number[] = [];
   for (const { k, length } of ranked) {
     if (holds >= holdCap) break;
     if (length >= MIN_HOLD_ROWS && Math.abs(k - lastHold) >= 8) {
       tokens.set(k, { kind: 'hold', rows: length });
+      held.push(k);
       holds++;
       lastHold = k;
     }
+  }
+
+  // Double holds: some of the holds, on the hits the most of the sound agrees on, kept well apart.
+  const doubleRows = new Uint8Array(rows + 1); // (the rows a double or a double hold covers)
+  const doubleHoldCap = held.length < 2 ? 0 : Math.max(1, Math.round(settings.doubleHolds * held.length));
+  const doubleHolds: number[] = [];
+  for (const k of [...held].sort((a, b) => agree[b] - agree[a] || strength[b] - strength[a] || a - b)) {
+    if (doubleHolds.length >= doubleHoldCap) break;
+    if (doubleHolds.some((other) => Math.abs(other - k) < DOUBLE_HOLD_SPACING)) continue;
+    const { rows: length } = tokens.get(k)!;
+    tokens.set(k, { kind: 'doublehold', rows: length });
+    doubleRows.fill(1, k, k + length);
+    doubleHolds.push(k);
   }
 
   // Doubles: taps on the hits that the most of the low, middle and high of the sound agree on. Every
@@ -255,14 +275,14 @@ export function chooseTiles(features: Features, grid: Grid, rows: number, level:
     const turns = [...byStretch.entries()]
       .sort(([a], [b]) => a - b)
       .map(([, taps]) => taps.sort((a, b) => agree[b] - agree[a] || strength[b] - strength[a]));
-    const isDouble = (k: number) => tokens.get(k)?.kind === 'double';
     let doubles = 0;
     while (doubles < doubleCap && turns.some((taps) => taps.length > 0)) {
       for (const taps of turns) {
         if (doubles >= doubleCap) break;
         for (let k = taps.shift(); k !== undefined; k = taps.shift()) {
-          if (isDouble(k - 1) || isDouble(k + 1)) continue; // (never two rows of doubles in a row)
+          if (doubleRows[k - 1] || doubleRows[k + 1]) continue; // (never two rows of doubles in a row)
           tokens.set(k, { kind: 'double', rows: 1 });
+          doubleRows[k] = 1;
           doubles++;
           break;
         }
@@ -272,14 +292,14 @@ export function chooseTiles(features: Features, grid: Grid, rows: number, level:
   return { tokens, rows };
 }
 
-/** The tiles in the game's notation: x tap, xx double, x~3 hold, . rest; eight rows to a line. */
+/** The tiles in the game's notation: x tap, xx double, x~3 hold, xx~3 double hold, . rest; eight rows to a line. */
 export function formatTiles(chart: Tiles): string {
   const lines: string[] = [];
   let line: string[] = [];
   let row = 0;
   while (row < chart.rows) {
     const tile = chart.tokens.get(row);
-    line.push(!tile ? '.' : tile.kind === 'tap' ? 'x' : tile.kind === 'double' ? 'xx' : `x~${tile.rows}`);
+    line.push(!tile ? '.' : tile.kind === 'tap' ? 'x' : tile.kind === 'double' ? 'xx' : `${tile.kind === 'hold' ? 'x' : 'xx'}~${tile.rows}`);
     row += tile?.rows ?? 1;
     if (row % 8 === 0 || row >= chart.rows) {
       lines.push(line.join(' '));

@@ -78,7 +78,7 @@ export function analyze(samples: Float32Array, options: AnalyzeOptions, onProgre
   onProgress?.({ stage: 'chart', message: 'Placing the tiles', fraction: 0.95 });
   const tiles = chooseTiles(features, grid, rows, options.density, rowsPerBeat);
   const numbers = describe(tiles, grid, stop);
-  const doubles = [...tiles.tokens.values()].filter((tile) => tile.kind === 'double').length;
+  const doubles = [...tiles.tokens.values()].filter((tile) => tile.kind === 'double' || tile.kind === 'doublehold').length;
 
   const warnings: string[] = [];
   if (confidence < 0.35) {

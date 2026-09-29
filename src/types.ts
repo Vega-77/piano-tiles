@@ -10,7 +10,7 @@ export interface GameState {
   songId: string;
   /** 0–1: how far through the current lap of the song. */
   progress: number;
-  /** Consecutive perfect hits. */
+  /** The chain: perfect hits in a row (a good hit keeps it going without adding to it). */
   combo: number;
   /** Points multiplier earned by the current chain of perfects. */
   comboMultiplier: number;
@@ -69,6 +69,8 @@ export type BeatSpec =
   /** Two tiles in the same row with exactly one lane between them. */
   | { type: 'double'; freqs: [number, number] }
   | { type: 'hold'; freq: number; rows: number }
+  /** Two hold tiles in the same row with exactly one lane between them: both are pressed and held. */
+  | { type: 'doublehold'; freqs: [number, number]; rows: number }
   /** A gap: nothing to tap for this many rows. */
   | { type: 'rest'; rows: number };
 
