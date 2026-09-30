@@ -10,12 +10,9 @@ import {
   HOLD_TICK_POINTS,
   LAP_REST_SECONDS,
   LAP_SPEED_STEP,
-  LIFE_CHAIN,
-  LIVES,
   OK_WINDOW,
   PERFECT_WINDOW,
   POINTS,
-  STRIKE_GRACE,
   TILE_HEIGHT,
 } from '../config';
 import { buildTrack, type Arrangement } from '../songs/arrangement';
@@ -105,11 +102,6 @@ interface SetupOptions {
    * tile is coming into view, which is where most tests want to start. `false` stays at the very start.
    */
   onBoard?: boolean;
-  /**
-   * Lives the run starts with. Most tests are about what a mistake does to the board and the run, and are clearest when the
-   * first one ends it, so that is the default here (the game itself gives `LIVES`, and the tests on lives ask for them).
-   */
-  lives?: number;
 }
 
 /** Rows before the first tile reaches the bar at which `setup` leaves the clock: three rows above it, in view. */
@@ -117,7 +109,7 @@ const IN_VIEW_ROWS = 3;
 
 function setup(
   beats: BeatSpec[],
-  { speed = SPEED, arrangement, recording, effects = noopFx, onBoard = true, lives = 1 }: SetupOptions = {},
+  { speed = SPEED, arrangement, recording, effects = noopFx, onBoard = true }: SetupOptions = {},
 ) {
   const scheduled: Scheduled[] = [];
   const played: Played[] = [];
@@ -144,7 +136,6 @@ function setup(
     effects,
     onStateChange: (state) => states.push(state),
     onGameOver: (result) => results.push(result),
-    lives,
   });
   songTime = START;
   const song = makeSong(beats, speed, arrangement, recording);
@@ -705,175 +696,6 @@ describe('failing', () => {
     goTo(first.time);
     engine.press(later.lane, 'p1');
     expect(engine.getState().status).toBe('gameover');
-  });
-});
-
-describe('lives', () => {
-  /** A run with the game's own lives that has cleared tiles perfectly until the chain is `count` long. */
-  function played(count: number, options: SetupOptions & { beats?: BeatSpec[] } = {}) {
-    const popups: string[] = [];
-    const effects: Fx = { ...noopFx, popup: (text) => popups.push(text) };
-    const { beats = manyTaps(80), ...rest } = options;
-    const made = setup(beats, { lives: LIVES, effects, ...rest });
-    playPerfectly(made.engine, () => made.engine.getState().combo >= count);
-    return { ...made, popups };
-  }
-
-  /** Let the next tile go by untouched, on to the moment it is missed. */
-  function letGo(engine: GameEngine): void {
-    goTo(nextBeat(engine)[0].time + OK_WINDOW + 0.01);
-  }
-
-  it('start full, and are shown in the state', () => {
-    const { engine } = setup(manyTaps(20), { lives: LIVES });
-    expect(engine.getState().lives).toBe(LIVES);
-  });
-
-  it('are lost, one by one, to a tile that is missed, and the run goes on with the chain gone', () => {
-    const { engine, results, calls } = played(COMBO_STEP + 1);
-    expect(engine.getState()).toMatchObject({ lives: LIVES, comboMultiplier: 2 });
-    const doomed = nextBeat(engine)[0];
-
-    letGo(engine);
-    expect(engine.getState()).toMatchObject({ status: 'playing', lives: LIVES - 1, combo: 0, comboMultiplier: 1 });
-    expect(doomed.isHit).toBe(true); // (left behind)
-    expect(calls.errors).toBe(1);
-    expect(results).toHaveLength(0);
-
-    // The next tile is on the board, and taking it starts a new chain.
-    const next = nextBeat(engine)[0];
-    expect(next.beat).toBe(doomed.beat + 1);
-    const before = engine.getState().score;
-    tapAt(engine, next, 0);
-    expect(engine.getState()).toMatchObject({ status: 'playing', lives: LIVES - 1, combo: 1 });
-    expect(engine.getState().score - before).toBe(POINTS.perfect);
-  });
-
-  it('are lost to a tap that is too early, and that tile is still there to be tapped', () => {
-    const { engine, results } = played(3);
-    const tile = nextBeat(engine)[0];
-    tapAt(engine, tile, -OK_WINDOW - 0.05);
-    expect(engine.getState()).toMatchObject({ status: 'playing', lives: LIVES - 1, combo: 0 });
-    expect(tile.isHit).toBe(false);
-    expect(results).toHaveLength(0);
-    tapAt(engine, tile, 0);
-    expect(tile.isHit).toBe(true);
-    expect(engine.getState()).toMatchObject({ lives: LIVES - 1, combo: 1 });
-  });
-
-  it('are lost to a tap in a lane with no tile in it', () => {
-    const { engine, results } = played(3);
-    const tile = nextBeat(engine)[0];
-    goTo(tile.time);
-    engine.press((tile.lane + 1) % 4, 'p1');
-    expect(engine.getState()).toMatchObject({ status: 'playing', lives: LIVES - 1, combo: 0 });
-    expect(tile.isHit).toBe(false);
-    expect(results).toHaveLength(0);
-    engine.press(tile.lane, 'p1');
-    expect(tile.isHit).toBe(true);
-  });
-
-  it('are lost one at a time when mistakes come close together, however many taps make the fumble', () => {
-    const { engine } = played(3);
-    const tile = nextBeat(engine)[0];
-    goTo(tile.time - 0.1);
-    for (let i = 0; i < 4; i++) {
-      engine.press((tile.lane + 1) % 4, 'p1'); // (four blank taps in a row are one mistake)
-      songTime += (STRIKE_GRACE - 0.05) / 3;
-    }
-    expect(engine.getState().lives).toBe(LIVES - 1);
-    songTime += STRIKE_GRACE;
-    engine.press((tile.lane + 1) % 4, 'p1');
-    expect(engine.getState().lives).toBe(LIVES - 2);
-  });
-
-  it('cost one life for a double of which neither tile is tapped', () => {
-    const { engine } = played(1, { beats: [tap(), double(), tap(), tap(), tap(), tap()] });
-    expect(nextBeat(engine)).toHaveLength(2);
-    letGo(engine);
-    expect(engine.getState()).toMatchObject({ status: 'playing', lives: LIVES - 1 });
-    expect(nextBeat(engine)[0].beat).toBe(2);
-  });
-
-  it('end the run when the last one goes, and the game over says what did it', () => {
-    const { engine, results } = played(3);
-    for (let i = 0; i < LIVES - 1; i++) {
-      letGo(engine);
-      expect(engine.getState().status).toBe('playing');
-    }
-    expect(engine.getState().lives).toBe(1);
-    letGo(engine);
-    expect(engine.getState()).toMatchObject({ status: 'gameover', lives: 0 });
-    expect(results).toEqual([expect.objectContaining({ reason: 'miss' })]);
-
-    const wrong = played(3);
-    for (let i = 0; i < LIVES; i++) {
-      const tile = nextBeat(wrong.engine)[0];
-      goTo(tile.time - 0.2);
-      wrong.engine.press((tile.lane + 1) % 4, 'p1');
-      goTo(tile.time);
-      wrong.engine.press(tile.lane, 'p1'); // (the tile is tapped in the end: it is the blank taps that cost the lives)
-    }
-    expect(wrong.engine.getState().status).toBe('gameover');
-    expect(wrong.results[0].reason).toBe('wrong');
-  });
-
-  it('come back, one for every LIFE_CHAIN perfects in a row, but never beyond the full number', () => {
-    const { engine, popups } = played(1);
-    letGo(engine);
-    letGo(engine);
-    expect(engine.getState().lives).toBe(LIVES - 2);
-    playPerfectly(engine, () => engine.getState().combo >= LIFE_CHAIN - 1);
-    expect(engine.getState()).toMatchObject({ lives: LIVES - 2, combo: LIFE_CHAIN - 1 });
-    playPerfectly(engine, () => engine.getState().combo >= LIFE_CHAIN);
-    expect(engine.getState().lives).toBe(LIVES - 1);
-    expect(popups).toContain('+1 LIFE');
-    playPerfectly(engine, () => engine.getState().combo >= LIFE_CHAIN * 2);
-    expect(engine.getState().lives).toBe(LIVES);
-    playPerfectly(engine, () => engine.getState().combo >= LIFE_CHAIN * 3);
-    expect(engine.getState().lives).toBe(LIVES);
-  });
-
-  it('are not won back by a chain that a good hit cut short', () => {
-    const { engine } = played(1);
-    letGo(engine);
-    expect(engine.getState().lives).toBe(LIVES - 1);
-    playPerfectly(engine, () => engine.getState().combo >= LIFE_CHAIN - 1);
-    tapAt(engine, nextBeat(engine)[0], 0.14); // good: the chain is over
-    expect(engine.getState().combo).toBe(0);
-    playPerfectly(engine, () => engine.getState().combo >= LIFE_CHAIN - 1);
-    expect(engine.getState().lives).toBe(LIVES - 1);
-  });
-
-  it('are all back after a continue, and for a new game', () => {
-    const made = played(6, { beats: manyTaps(16) });
-    const { engine } = made;
-    for (let i = 0; i < LIVES; i++) {
-      letGo(engine);
-      songTime += STRIKE_GRACE;
-    }
-    expect(engine.getState()).toMatchObject({ status: 'gameover', lives: 0 });
-    expect(engine.canContinue()).toBe(true);
-
-    engine.continueRun();
-    expect(engine.getState()).toMatchObject({ status: 'playing', lives: LIVES, combo: 0 });
-
-    songTime = 900;
-    engine.start(made.song);
-    expect(engine.getState().lives).toBe(LIVES);
-  });
-
-  it('give the continue only when the last is gone, not for a mistake with lives to spare', () => {
-    const { engine, results } = played(4, { beats: manyTaps(16) });
-    letGo(engine);
-    expect(engine.getState().status).toBe('playing');
-    expect(engine.canContinue()).toBe(false);
-    expect(results).toHaveLength(0);
-    letGo(engine);
-    letGo(engine);
-    expect(engine.getState().status).toBe('gameover');
-    expect(engine.canContinue()).toBe(true);
-    expect(results).toEqual([expect.objectContaining({ continueScore: expect.any(Number) })]);
   });
 });
 

@@ -26,7 +26,7 @@ npm run preview  # serve the production build
 - **Keyboard:** `D` `F` `J` `K` are lanes 1–4. `Esc` pauses.
 - The board is empty through a four-beat count-in (a big 4-3-2-1, with a tick on each beat) before the first tile arrives, and every later lap starts with a break and another count-in (see below).
 - Tiles come in rhythm, so there are **gaps**: rows with nothing to tap. Wait through them.
-- Tap a lane with no tile in it, leave a tile too long, or tap one far too early, and you lose a **heart**: you have three, and when the last one goes it's over, unless you take a [second chance](#a-second-chance). See [Hearts](#hearts).
+- Tap a lane with no tile in it, leave a tile too long, or tap one far too early, and it's over, unless you take a [second chance](#a-second-chance). A tap that is early or late but inside the windows below never ends the run: it only breaks your chain.
 - The game pauses itself if you switch tabs.
 - **Resuming counts you back in.** After a pause, the music and tiles stay frozen until a four-beat 4-3-2-1 has played out at the tempo you were playing at, ticking on the beat. Taps are ignored while it counts. Pausing again mid-count starts the count over.
 - **Touches not doing what they should?** Add `?input` to the end of the game's address (`…/piano-tiles/?input`). A small readout at the bottom shows every finger that goes down, comes up or is cancelled by the browser, and how many are down, so it can be seen whether the screen is sending what the game expects. Under each finger it says what the game made of the tap (`tap L3: good +120ms`: which lane, the grade, and how early (−) or late (+) it was; or why it was ignored), any frame that took long (`slow frame`), and the audio's delay to the speaker. A finger the page only heard of late says so (`down (heard 480ms late) touch …`), and when a double, a hold or a double hold comes due it says so (`due: double hold in L0 and L2`), so the fingers can be lined up against the moment they were asked for. A screenshot of it, with the game over text, says what went wrong.
@@ -40,7 +40,7 @@ The glowing bar is where the **middle of each tile** should be when you tap it. 
 | **Perfect** (within 100 ms of the bar) | 100 |
 | **Good** (within 180 ms), early or late | 60 |
 | **OK** (within 250 ms), early or late | 25 |
-| **Further off than that** | The tile doesn't line up with the bar: it breaks the chain and costs a [heart](#hearts) |
+| **Further off than that** | The tile doesn't line up with the bar: **game over** |
 
 **Double holds are switched off for now** (`DOUBLE_HOLDS` in `src/config.ts`): they did not make the game better. The analyser lays none, and a chart that has some (the published songs do) plays each as an ordinary hold of the same length, so nothing moves and no song needs re-charting. Everything for them is still in the game and the notation; setting `DOUBLE_HOLDS` to `true` brings them back.
 
@@ -54,28 +54,19 @@ The music is played so that what you *hear* is on the song clock, whatever the s
 
 ### Chains
 
-Each perfect extends your **chain**; anything else ends it. A good or OK hit (early or late, however slightly) still scores its points but resets the chain to zero, and so does any mistake (a tile let go by, a tap that is nowhere near the bar, a tap in a lane with no tile). Every 5 perfects in a row adds 1 to the points multiplier, up to ×8, and the multiplier applies to every point you score after that. The chain shows under the score.
-
-### Hearts
-
-Since the timing window is forgiving, a hit that is early or late only costs you the chain; it takes a real mistake to hurt more. You have **three hearts** (`LIVES` in `src/config.ts`, shown under the score):
-
-- **A mistake costs one heart** and resets the chain: a tile that scrolls past the bar untouched, a tap more than 250 ms early, or a tap in a lane with no tile. The run goes on.
-- **Mistakes that come together count as one** (`STRIKE_GRACE`, 0.3 s), so a stray finger just after a slip does not cost a second heart, and a double that is missed is one mistake, not two.
-- **A heart is won back** for every 20 perfects in a row (`LIFE_CHAIN`), up to three: a run of clean play makes up for a slip, and a chain cut by a good hit starts that count over.
-- **Losing the last heart ends the run**, unless you take the [second chance](#a-second-chance), which brings all three back.
+Only a **perfect** extends your **chain**. A hit that is only good or OK, early or late, still scores its points but resets the chain to zero (it does not end the run: only a tile left to go by, a tap far too early or a tap in an empty lane does that). Every 5 perfects in a row adds 1 to the points multiplier, up to ×8, and the multiplier applies to every point you score after that. The chain shows under the score, and a popup says when a chain worth a multiplier is lost.
 
 ### A second chance
 
-A run that loses its last heart with points on the board is offered **one continue**: pick up from the start of the bar you fell in, after a four-beat count-in, with all three hearts back. It costs no money and shows no ad; it costs points and the chain:
+A run that fails with points on the board is offered **one continue**: pick up from the start of the bar you fell in, after a four-beat count-in. It costs no money and shows no ad; it costs points and the chain:
 
 - **A quarter of the score is taken** (`CONTINUE_SCORE_COST` in `src/config.ts`, 25%). The offer says what you would keep, e.g. *Continue with 750*, next to *No thanks, keep 1,000*.
 - **The chain starts over**: the multiplier goes back to ×1 (the best chain of the run still counts for the stats).
-- **Once per run.** Losing the last heart again ends it, and no offer is made to a run that has scored nothing.
+- **Once per run.** The second fall ends it, and no offer is made to a run that has scored nothing.
 
 The way back in is the same count-in as after a pause: the song is held still while four ticks sound and the numbers 4-3-2-1 show, taps are ignored, then the song moves again from a beat before the bar, with the tiles of the bar laid out afresh (in new lanes) and the recording joining at the right place. A fall in the first bar of a lap goes back through that lap's own count-in, which is already the way into it. The lap and its speed are the ones you fell in.
 
-**The run only counts once it is over.** While the offer is on screen nothing is saved: the best score, the play count and the [leaderboard](#leaderboards-and-nicknames) are all left until the offer is turned down (*No thanks*, or `Esc`), the last heart goes a second time and ends the run, or the player leaves (*Quit*, or starting again). A continued run counts on the leaderboard like any other, at the score it ends with.
+**The run only counts once it is over.** While the offer is on screen nothing is saved: the best score, the play count and the [leaderboard](#leaderboards-and-nicknames) are all left until the offer is turned down (*No thanks*, or `Esc`), the second fall ends the run, or the player leaves (*Quit*, or starting again). A continued run counts on the leaderboard like any other, at the score it ends with.
 
 ### The music
 
@@ -142,7 +133,7 @@ Every published song has a leaderboard (the top ten, with your own place shown i
 
 - **After a run**, a player with no nickname is asked for one. Choosing it makes them a **guest** (a Firebase anonymous account, made at that moment and not before), and their score goes on the board. The nickname and the guest account stay on that device for future runs.
 - **Nicknames are unique** whatever their capitals (`Pat` and `pat` are the same name), 3–16 letters, numbers, `-` and `_`, and once taken are the account's for good. The database enforces it, not just the page: a nickname is a document that can only be created once.
-- **Only after a run.** A score is sent for a song as it is published, when the run ends (for a run that could be [continued](#a-second-chance), when that is turned down or the last heart goes a second time), and only if it beats the player's best on that song; the leaderboard keeps one entry per player per song. A run of zero isn't sent.
+- **Only after a run.** A score is sent for a song as it is published, when the run ends (for a run that could be [continued](#a-second-chance), when that is turned down or the second fall comes), and only if it beats the player's best on that song; the leaderboard keeps one entry per player per song. A run of zero isn't sent.
 - **Keeping a nickname.** A guest lives only in that browser, so clearing the browser's data loses it (and the name stays taken). **Keep it with Google** (or **Sign in with Google**, for someone who has played before) under the title turns the guest into a Google account with the same nickname and scores, which then follows the player to other devices. Only a Google account can sign out.
 - **What the rules keep out:** someone else's name, someone else's entry, a lowered score, extra fields, and absurd numbers (at most 100,000,000 points, 1,000 laps, a chain of 100,000). What they can't keep out is cheating: the game runs in the player's browser, so a determined player can send any score inside those limits. That is fine for friends; for a wide public it would need scores checked on a server, which is beyond the free plan.
 - **Not there:** replays and ghosts.
@@ -235,7 +226,7 @@ The 60fps loop lives outside React so per-frame movement never triggers a render
 | `src/components/` | The screens and overlays: song list (`SongSelect`, `AccountPanel`, `ImportPanel`, `JobStatus`), the separate `TuneScreen` (with Publish), the leaderboard (`Leaderboard`, `NameForm`, `RunStanding`), the HUD, pause and game over |
 | `src/hooks/useGame.ts` | Bridges the engine to React; state updates only on start, each score, each lap, pause and game over |
 | `src/index.css` | Tile looks and animations, switched by `data-kind` / `data-state` attributes |
-| `src/config.ts` | Tunables: timing windows, points, chain steps, hearts, wide double lanes, lap speed step |
+| `src/config.ts` | Tunables: timing windows, points, chain steps, wide double lanes, lap speed step |
 
 Tile positions are percentages of board height (`yPos`, 0–100), so the game looks identical at any screen size. Visual effects respect `prefers-reduced-motion`.
 

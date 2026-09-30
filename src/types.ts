@@ -10,10 +10,8 @@ export interface GameState {
   songId: string;
   /** 0–1: how far through the current lap of the song. */
   progress: number;
-  /** The chain: perfect hits in a row (anything early or late, or a mistake, breaks it). */
+  /** The chain: perfect hits in a row (anything early or late, even a good hit, breaks it). */
   combo: number;
-  /** Lives left: a mistake costs one, and the run is over when none are. */
-  lives: number;
   /** Points multiplier earned by the current chain of perfects. */
   comboMultiplier: number;
   /** Completed laps of the song; each one makes the tiles faster. */

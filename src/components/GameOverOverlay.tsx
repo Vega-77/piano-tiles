@@ -33,16 +33,17 @@ function Stat({ label, value, tone }: { label: string; value: number; tone?: str
 }
 
 const REASONS: Record<FailReason, string> = {
-  miss: 'a tile you missed',
-  early: 'a tap that was nowhere near the bar',
-  wrong: 'a tap in a lane with no tile',
+  miss: 'You missed a tile',
+  early: 'You tapped too early: the tile was nowhere near the bar',
+  wrong: 'You tapped a lane with no tile in it',
 };
 
-/** What ended the run: the last life went to a mistake, with how far off the tap was when it was one that missed. */
+/** What ended the run, with how far off the tap was when it was one that missed. */
 export function reasonText(result: Pick<GameOverResult, 'reason' | 'by'>): string {
-  const lost = 'Out of lives: the last one went to ';
-  if (result.by === undefined) return lost + REASONS[result.reason];
-  return lost + (result.reason === 'early' ? `a tap ${result.by} ms too early` : `a tap ${result.by} ms too late`);
+  if (result.by === undefined) return REASONS[result.reason];
+  return result.reason === 'early'
+    ? `You tapped too early: the tile was still ${result.by} ms from the bar`
+    : `You tapped ${result.by} ms too late`;
 }
 
 /** What continuing costs, in words: a share of the score is taken, and the chain starts over. */

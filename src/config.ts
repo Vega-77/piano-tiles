@@ -34,21 +34,10 @@ export const CONTINUE_SCORE_COST = 0.25;
 export const PERFECT_WINDOW = 0.1;
 export const GOOD_WINDOW = 0.18;
 /**
- * The furthest a tap may be from the bar and still count. Tap earlier than this and the tile doesn't line up with the
- * bar (a mistake); leave a tile later than this and it is missed (a mistake too). Neither ends the run by itself: each
- * breaks the chain and costs a life (see `LIVES`).
+ * The furthest a tap may be from the bar and still count. Tap earlier than this and the tile
+ * doesn't line up with the bar: the game ends. Leave a tile later than this and it's missed.
  */
 export const OK_WINDOW = 0.25;
-
-/**
- * A run has this many lives. A mistake (a tile missed, a tap too early, a tap in a lane with no tile) breaks the chain and
- * costs one; when the last is gone the run is over. Without a limit nothing could ever end a run.
- */
-export const LIVES = 3;
-/** Mistakes closer together than this (seconds) are one mistake as far as lives go, so a fumbled tile costs one life. */
-export const STRIKE_GRACE = 0.3;
-/** Every this many perfects in a row wins a life back (never above `LIVES`). */
-export const LIFE_CHAIN = 20;
 /**
  * Whether songs have double holds. They are switched off for now: they did not make the game any better to play, so the
  * analyser lays none and a chart that has one (`xx~3`) is played with an ordinary hold of the same length, which keeps
@@ -71,8 +60,8 @@ export const POINTS = { perfect: 100, good: 60, ok: 25 } as const;
 export const HOLD_TICK_POINTS = 10;
 
 /**
- * Every COMBO_STEP perfects in a row raises the points multiplier by one... Anything but a perfect breaks the chain: a
- * tap that is early or late (a good or an OK) as much as a mistake.
+ * Every COMBO_STEP perfects in a row raises the points multiplier by one... Anything but a perfect breaks the chain: a hit
+ * that is only good or OK, early or late, still scores but starts the chain over (it does not end the run).
  */
 export const COMBO_STEP = 5;
 /** ...up to this cap. */

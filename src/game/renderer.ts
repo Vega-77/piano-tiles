@@ -13,9 +13,6 @@ export interface AddOptions {
   link?: number;
 }
 
-/** How long a red cell shows where a finger came down wrongly, in a run that carries on. */
-const BRIEF_ERROR_MS = 450;
-
 function div(className: string): HTMLDivElement {
   const el = document.createElement('div');
   el.className = className;
@@ -114,11 +111,8 @@ export class TileRenderer {
     this.setState(id, 'miss');
   }
 
-  /**
-   * Red cell where the player tapped a blank space or a tile out of order. It stays for good when that ended the run;
-   * otherwise (`brief`) it flashes and goes, as the board carries on.
-   */
-  showError(lane: number, yPos: number, brief = false): void {
+  /** Red cell where the player tapped a blank space or a tile out of order. */
+  showError(lane: number, yPos: number): void {
     const root = div('tile tile-error');
     root.style.left = `${lane * (100 / LANES)}%`;
     root.style.height = `${TILE_HEIGHT}%`;
@@ -127,7 +121,6 @@ export class TileRenderer {
     face.textContent = '✕';
     root.append(face);
     this.layer.append(root);
-    if (brief) window.setTimeout(() => root.remove(), BRIEF_ERROR_MS);
   }
 
   /** Animate the next draw() instead of snapping (used to reveal a missed tile). */

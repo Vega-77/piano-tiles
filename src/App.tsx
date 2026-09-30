@@ -117,7 +117,6 @@ export default function App() {
               score={state.score}
               combo={state.combo}
               comboMultiplier={state.comboMultiplier}
-              lives={state.lives}
               lap={state.lap}
               speedMultiplier={state.speedMultiplier}
               progress={state.progress}

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { TileRenderer } from './renderer';
 import type { Tile } from '../types';
 
@@ -24,7 +24,6 @@ beforeEach(() => {
   layer = document.createElement('div');
   renderer = new TileRenderer(layer);
 });
-afterEach(() => vi.useRealTimers());
 
 describe('the tiles of a double', () => {
   it('draw a bar as many lanes wide as the two tiles are apart', () => {
@@ -37,22 +36,5 @@ describe('the tiles of a double', () => {
   it('draw no bar for a tile that stands alone', () => {
     renderer.add(tile());
     expect(layer.querySelector('.tile-link')).toBeNull();
-  });
-});
-
-describe('the red cell for a wrong tap', () => {
-  it('stays when it ended the run', () => {
-    vi.useFakeTimers();
-    renderer.showError(2, 0.5);
-    vi.advanceTimersByTime(10_000);
-    expect(layer.querySelectorAll('.tile-error')).toHaveLength(1);
-  });
-
-  it('goes again after a moment when the run carries on', () => {
-    vi.useFakeTimers();
-    renderer.showError(2, 0.5, true);
-    expect(layer.querySelectorAll('.tile-error')).toHaveLength(1);
-    vi.advanceTimersByTime(1000);
-    expect(layer.querySelectorAll('.tile-error')).toHaveLength(0);
   });
 });

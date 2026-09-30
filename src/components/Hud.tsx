@@ -1,4 +1,4 @@
-import { COMBO_MAX_MULTIPLIER, COMBO_STEP, LIVES } from '../config';
+import { COMBO_MAX_MULTIPLIER, COMBO_STEP } from '../config';
 
 interface HudProps {
   title: string;
@@ -6,8 +6,6 @@ interface HudProps {
   /** Consecutive perfects, and the points multiplier they have earned. */
   combo: number;
   comboMultiplier: number;
-  /** Lives left: a mistake costs one, and the run is over when none are. */
-  lives: number;
   /** 0-based lap of the song, and how much faster than lap 1 the tiles now fall. */
   lap: number;
   speedMultiplier: number;
@@ -16,7 +14,7 @@ interface HudProps {
   onPause: () => void;
 }
 
-export function Hud({ title, score, combo, comboMultiplier, lives, lap, speedMultiplier, progress, onPause }: HudProps) {
+export function Hud({ title, score, combo, comboMultiplier, lap, speedMultiplier, progress, onPause }: HudProps) {
   const maxed = comboMultiplier >= COMBO_MAX_MULTIPLIER;
   // How far through the current chain step, for the little meter under the multiplier.
   const step = maxed ? 1 : (combo % COMBO_STEP) / COMBO_STEP;
@@ -69,29 +67,12 @@ export function Hud({ title, score, combo, comboMultiplier, lives, lap, speedMul
           </div>
         </div>
 
-        <div className="flex min-w-0 flex-1 flex-col items-end gap-1.5">
+        <div className="flex min-w-0 flex-1 justify-end">
           <span
             key={lap}
             className={`${lap > 0 ? 'flash' : ''} rounded-full bg-black/50 px-3 py-1 text-xs font-bold tabular-nums text-white/90 ring-1 ring-white/15`}
           >
             Lap {lap + 1} · ×{speedMultiplier.toFixed(2)}
-          </span>
-          {/* One heart a life; a lost one stays as an empty outline. Changing the key remounts it, which replays its flash. */}
-          <span
-            key={lives}
-            role="img"
-            aria-label={`${lives} of ${LIVES} lives left`}
-            className={`${lives < LIVES ? 'flash' : ''} flex gap-1 rounded-full bg-black/50 px-2.5 py-1 ring-1 ring-white/15`}
-          >
-            {Array.from({ length: LIVES }, (_, i) => (
-              <svg key={i} viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden>
-                <path
-                  d="M12 21s-7.5-4.6-9.6-9.3C.9 8.3 2.6 4.5 6.3 4.5c2.2 0 3.8 1.2 5.7 3.3 1.9-2.1 3.5-3.3 5.7-3.3 3.7 0 5.4 3.8 3.9 7.2C19.5 16.4 12 21 12 21z"
-                  className={i < lives ? 'fill-rose-400 stroke-rose-200' : 'fill-transparent stroke-white/35'}
-                  strokeWidth="1.6"
-                />
-              </svg>
-            ))}
           </span>
         </div>
       </div>
