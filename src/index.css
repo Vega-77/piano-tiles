@@ -114,7 +114,8 @@ body {
     /* Across the middle of the head: the bottom row, which is the whole tile unless it is a hold. */
     top: calc(100% - 50% / var(--rows, 1));
     left: 50%;
-    width: 200%;
+    /* Reaches the partner tile, `--span` lanes over (set on the tile; two if it isn't). */
+    width: calc(var(--span, 2) * 100%);
     height: 8px;
     margin-top: -4px;
     border-radius: 999px;

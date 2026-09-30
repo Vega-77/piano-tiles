@@ -336,17 +336,38 @@ describe('the analyser on made-up songs', () => {
       samples = await synthForAnalysis({ bpm: 120, offset: 0.2, seconds: 96, seed: 5, verse });
     }, SLOW);
 
-    /** Tiles that start in the verses and in the choruses. */
-    function share(chart: Measured): { verse: number; chorus: number } {
+    interface Part {
+      tiles: number;
+      doubles: number;
+      /** Tiles on the row right after another tile's. */
+      consecutive: number;
+    }
+
+    /** What starts in the verses and in the choruses. */
+    function tally(chart: Measured): { verse: Part; chorus: Part } {
       const rate = rowsPerSecond(chart);
-      const out = { verse: 0, chorus: 0 };
+      const out = {
+        verse: { tiles: 0, doubles: 0, consecutive: 0 },
+        chorus: { tiles: 0, doubles: 0, consecutive: 0 },
+      };
       let position = 0;
+      let last = -10;
       for (const token of chart.chart.split(/\s+/).filter(Boolean)) {
-        if (token !== '.') out[verse(chart.offset + position / rate) ? 'verse' : 'chorus']++;
+        if (token !== '.') {
+          const part = out[verse(chart.offset + position / rate) ? 'verse' : 'chorus'];
+          part.tiles++;
+          if (token.startsWith('xx')) part.doubles++;
+          if (position - last === 1) part.consecutive++;
+          last = position;
+        }
         position += token.includes('~') ? Number(token.split('~')[1]) : 1;
       }
       return out;
     }
+    const share = (chart: Measured) => {
+      const { verse: quiet, chorus: loud } = tally(chart);
+      return { verse: quiet.tiles, chorus: loud.tiles };
+    };
 
     for (const density of DENSITIES) {
       it(`does not leave the verses bare on ${density}, and still makes the chorus busier`, () => {
@@ -355,6 +376,45 @@ describe('the analyser on made-up songs', () => {
         expect(loud).toBeGreaterThan(quiet);
       }, SLOW);
     }
+
+    for (const density of DENSITIES) {
+      it(`gives the chorus more doubles than the verses on ${density}`, () => {
+        const { verse: quiet, chorus: loud } = tally(analyze(samples, { density }));
+        expect(loud.doubles).toBeGreaterThan(quiet.doubles);
+      }, SLOW);
+    }
+
+    for (const density of ['medium', 'hard'] as const) {
+      it(`runs tiles on consecutive rows in the loud parts, not the quiet ones, on ${density}`, () => {
+        const { verse: quiet, chorus: loud } = tally(analyze(samples, { density }));
+        expect(loud.consecutive).toBeGreaterThan(20);
+        expect(loud.consecutive).toBeGreaterThan(4 * quiet.consecutive);
+      }, SLOW);
+    }
+
+    it('keeps easy easy: more tiles and doubles in the chorus, but never two rows in a row', () => {
+      const { verse: quiet, chorus: loud } = tally(analyze(samples, { density: 'easy' }));
+      expect(loud.tiles).toBeGreaterThan(1.1 * quiet.tiles);
+      expect(quiet.consecutive + loud.consecutive).toBe(0);
+    }, SLOW);
+
+    it('leaves a song that stays at one level alone: no stretch of it is singled out', async () => {
+      const flat = await synthForAnalysis({ bpm: 120, offset: 0.2, seconds: 96, seed: 5 });
+      const chart = analyze(flat, { density: 'hard' });
+      const rate = rowsPerSecond(chart);
+      const stretches = new Map<number, number>();
+      let position = 0;
+      for (const token of chart.chart.split(/\s+/).filter(Boolean)) {
+        if (token !== '.') {
+          const stretch = Math.floor((chart.offset + position / rate) / 16);
+          stretches.set(stretch, (stretches.get(stretch) ?? 0) + 1);
+        }
+        position += token.includes('~') ? Number(token.split('~')[1]) : 1;
+      }
+      const counts = [0, 1, 2, 3].map((stretch) => stretches.get(stretch) ?? 0); // (the song's last stretch is a short one)
+      expect(Math.min(...counts)).toBeGreaterThan(0);
+      expect(Math.max(...counts)).toBeLessThan(1.25 * Math.min(...counts));
+    }, SLOW);
 
     it('keeps the difficulties: the same number of tiles, wherever they fall', () => {
       const tiles = DENSITIES.map((density) => analyze(samples, { density }).analysis!.tiles);

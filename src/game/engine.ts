@@ -5,14 +5,18 @@ import {
   CONTINUE_SCORE_COST,
   COUNT_IN_BEATS,
   DOUBLE_HOLD_LATE_WINDOW,
+  DOUBLE_LANES,
   DOUBLE_TAP_GUARD,
   GOOD_WINDOW,
   HOLD_TICK_POINTS,
   LANES,
+  LIFE_CHAIN,
+  LIVES,
   NOTE_LOOKAHEAD,
   OK_WINDOW,
   PERFECT_WINDOW,
   POINTS,
+  STRIKE_GRACE,
   TILE_HEIGHT,
 } from '../config';
 import { beatRows } from '../songs/notation';
@@ -71,6 +75,8 @@ interface EngineOptions {
   /** Fired on discrete events only (start, each score, each lap, game over) — never per frame. */
   onStateChange: (state: GameState) => void;
   onGameOver?: (result: GameOverResult) => void;
+  /** Lives a run starts with (and gets back with a continue). Missing: `LIVES`. */
+  lives?: number;
 }
 
 type Failure =
@@ -116,6 +122,7 @@ export function createInitialState(): GameState {
     songId: '',
     progress: 0,
     combo: 0,
+    lives: LIVES,
     comboMultiplier: 1,
     lap: 0,
     paused: false,
@@ -166,6 +173,7 @@ export class GameEngine {
   private readonly effects: Fx;
   private readonly onStateChange: (state: GameState) => void;
   private readonly onGameOver?: (result: GameOverResult) => void;
+  private readonly maxLives: number;
 
   private state = createInitialState();
   private song: Song | null = null;
@@ -198,6 +206,9 @@ export class GameEngine {
   private scroll = 0;
   private lap = 0;
   private combo = 0;
+  private lives = LIVES;
+  /** Song time of the mistake that last cost a life: mistakes right after it are part of it (`STRIKE_GRACE`). */
+  private lastLifeLost = -Infinity;
   private stats: RunStats = { perfect: 0, good: 0, ok: 0, maxChain: 0, tiles: 0, laps: 0 };
   private lastCleared: { lane: number; time: number } | null = null;
   private rafId = 0;
@@ -215,6 +226,9 @@ export class GameEngine {
     this.effects = options.effects;
     this.onStateChange = options.onStateChange;
     this.onGameOver = options.onGameOver;
+    this.maxLives = options.lives ?? LIVES;
+    this.lives = this.maxLives;
+    this.state = { ...this.state, lives: this.maxLives };
   }
 
   getState(): GameState {
@@ -257,6 +271,8 @@ export class GameEngine {
     this.recordedLap = 0;
     this.lap = 0;
     this.combo = 0;
+    this.lives = this.maxLives;
+    this.lastLifeLost = -Infinity;
     this.stats = { perfect: 0, good: 0, ok: 0, maxChain: 0, tiles: 0, laps: 0 };
     this.lastCleared = null;
     this.lastFrameAt = 0;
@@ -281,6 +297,7 @@ export class GameEngine {
       songId: song.id,
       progress: 0,
       combo: 0,
+      lives: this.lives,
       comboMultiplier: 1,
       lap: 0,
       paused: false,
@@ -303,6 +320,7 @@ export class GameEngine {
       speedMultiplier: 1,
       progress: 0,
       combo: 0,
+      lives: this.maxLives,
       comboMultiplier: 1,
       lap: 0,
       paused: false,
@@ -413,6 +431,8 @@ export class GameEngine {
     this.lap = lap;
     this.stats.laps = lap;
     this.combo = 0;
+    this.lives = this.maxLives;
+    this.lastLifeLost = -Infinity;
     this.lastCleared = null;
     this.announcedBeat = -1;
     this.lastFrameAt = 0;
@@ -429,6 +449,7 @@ export class GameEngine {
       status: 'playing',
       score,
       combo: 0,
+      lives: this.lives,
       comboMultiplier: 1,
       lap,
       speedMultiplier: Math.round(timeline.speedFactor(lap) * 100) / 100,
@@ -525,11 +546,11 @@ export class GameEngine {
 
     const tile = group.find((t) => t.lane === lane);
     if (!tile) {
-      // A stray repeat on a lane cleared a moment ago isn't fatal; anything else is a blank tap.
+      // A stray repeat on a lane cleared a moment ago is ignored; anything else is a blank tap, which is a mistake.
       const last = this.lastCleared;
       if (last && last.lane === lane && now - last.time < DOUBLE_TAP_GUARD) return;
-      trace(() => `tap L${lane}: no tile there, they are in L${group.map((t) => t.lane).join(' and L')}: game over`);
-      this.endGame({ kind: 'wrong', lane, rowY: group[0].yPos + (group[0].rows - 1) * TILE_HEIGHT });
+      trace(() => `tap L${lane}: no tile there, they are in L${group.map((t) => t.lane).join(' and L')}: a mistake`);
+      this.strike({ kind: 'wrong', lane, rowY: group[0].yPos + (group[0].rows - 1) * TILE_HEIGHT }, now);
       return;
     }
     if (!this.isPressable(tile)) {
@@ -541,9 +562,9 @@ export class GameEngine {
     const { judgment, early } = judge(delta, tile.lateWindow);
     const heard = age > 0.004 ? `, heard ${Math.round(age * 1000)}ms late` : '';
     if (!judgment) {
-      trace(() => `tap L${lane}: ${signedMs(delta)} is too ${delta < 0 ? 'early' : 'late'}${heard}: game over`);
+      trace(() => `tap L${lane}: ${signedMs(delta)} is too ${delta < 0 ? 'early' : 'late'}${heard}: a mistake`);
       const by = Math.round(Math.abs(delta) * 1000);
-      this.endGame(delta < 0 ? { kind: 'early', tile, by } : { kind: 'miss', tiles: [tile], late: by });
+      this.strike(delta < 0 ? { kind: 'early', tile, by } : { kind: 'miss', tiles: this.overdue(tile.beat, now), late: by }, now);
       return;
     }
     trace(() => `tap L${lane}: ${judgment} ${signedMs(delta)}${heard}`);
@@ -625,13 +646,11 @@ export class GameEngine {
     // A beat is missed once its tiles are too late to tap and still untouched.
     const beat = this.targetBeat();
     this.announceDue(beat, now);
-    const missed = this.tiles.filter(
-      (t) => t.beat === beat && !t.isHit && t.hold?.phase !== 'holding' && now - t.time > t.lateWindow,
-    );
+    const missed = this.overdue(beat, now);
     if (missed.length > 0) {
-      trace(() => `missed L${missed.map((t) => t.lane).join(' and L')}: nothing tapped in time, game over`);
-      this.endGame({ kind: 'miss', tiles: missed });
-      return;
+      trace(() => `missed L${missed.map((t) => t.lane).join(' and L')}: nothing tapped in time`);
+      this.strike({ kind: 'miss', tiles: missed }, now);
+      if (this.state.status !== 'playing') return;
     }
 
     while (this.tiles.length > 0 && this.tiles[0].isHit && this.tiles[0].yPos >= 100) {
@@ -753,8 +772,9 @@ export class GameEngine {
     const multiplier = comboMultiplier(this.combo);
     const points = POINTS[judgment] * multiplier;
 
-    // A perfect adds to the chain, a good hit keeps what it has, anything less breaks it.
-    this.combo = judgment === 'perfect' ? this.combo + 1 : judgment === 'good' ? this.combo : 0;
+    // Only a perfect adds to the chain: a tap that is early or late, even a good one, breaks it.
+    if (judgment === 'perfect') this.combo++;
+    else this.breakChain();
     this.stats[judgment]++;
     this.stats.tiles++;
     this.stats.maxChain = Math.max(this.stats.maxChain, this.combo);
@@ -781,7 +801,70 @@ export class GameEngine {
       this.effects.popup(`×${comboMultiplier(this.combo)}`, 50, 46, { sub: 'CHAIN', judgment: 'perfect' });
       this.effects.setEnergy(this.energy());
     }
+    if (judgment === 'perfect' && this.combo % LIFE_CHAIN === 0) this.winLife();
     this.award(points);
+  }
+
+  /** The chain is over: the multiplier goes back to ×1, and if it was worth anything the player is told. */
+  private breakChain(): void {
+    const lost = comboMultiplier(this.combo);
+    this.combo = 0;
+    if (lost > 1) {
+      this.effects.popup('CHAIN LOST', 50, 46, { sub: `×${lost} is gone`, hue: 0 });
+      this.effects.setEnergy(this.energy());
+    }
+  }
+
+  /** A long chain wins a life back, unless they are all there already. */
+  private winLife(): void {
+    if (this.lives >= this.maxLives) return;
+    this.lives++;
+    this.effects.popup('+1 LIFE', 50, 38, { sub: `${this.lives} left`, judgment: 'perfect' });
+  }
+
+  /** The tiles of `beat` that are too late to tap and still untouched (a hold that is being held is not one). */
+  private overdue(beat: number, now: number): Tile[] {
+    return this.tiles.filter((t) => t.beat === beat && !t.isHit && t.hold?.phase !== 'holding' && now - t.time > t.lateWindow);
+  }
+
+  /**
+   * A mistake: a tile missed, a tap too early, or a tap in a lane with no tile. It breaks the chain and costs a life, unless it
+   * comes right on the heels of another that did (`STRIKE_GRACE`), and the last life ends the run. A tile that was missed is
+   * left behind and the song goes on; a tap that was early or in the wrong lane leaves the tiles where they are, to be tapped.
+   */
+  private strike(failure: Failure, now: number): void {
+    if (this.state.status !== 'playing') return;
+    if (now - this.lastLifeLost >= STRIKE_GRACE) {
+      this.lives--;
+      this.lastLifeLost = now;
+    }
+    if (this.lives <= 0) {
+      this.endGame(failure);
+      return;
+    }
+
+    this.breakChain();
+    let x = 50;
+    let label = 'MISS';
+    if (failure.kind === 'miss') {
+      for (const tile of failure.tiles) {
+        tile.isHit = true;
+        if (tile.hold) tile.hold.phase = 'done';
+        this.renderer.markMiss(tile.id);
+      }
+      x = laneCenter(failure.tiles[0].lane);
+    } else {
+      // (A cell that flashes red where the finger came down, on the bar.)
+      const lane = failure.kind === 'early' ? failure.tile.lane : failure.lane;
+      this.renderer.showError(lane, BAR_Y - TILE_HEIGHT / 2, true);
+      x = laneCenter(lane);
+      label = failure.kind === 'early' ? 'TOO EARLY' : 'WRONG LANE';
+    }
+    this.audio.playError();
+    this.effects.fail(x, BAR_Y);
+    this.effects.popup(label, x, BAR_Y - 14, { sub: this.lives === 1 ? 'Last life!' : `${this.lives} lives left`, hue: 0 });
+    this.refreshTargets();
+    this.setState({ lives: this.lives, combo: 0, comboMultiplier: 1 });
   }
 
   /** Pay out every tick of a held tile that has come due by `now`. */
@@ -828,6 +911,7 @@ export class GameEngine {
     this.refreshTargets();
     this.setState({
       score: this.state.score + points,
+      lives: this.lives,
       combo: this.combo,
       comboMultiplier: comboMultiplier(this.combo),
       progress: this.progress(),
@@ -869,7 +953,7 @@ export class GameEngine {
       // The run isn't over yet: it can be picked up again, and until that is turned down nothing about it is saved.
       this.offer = { ...point, failed };
       const { score, songId } = this.state;
-      this.setState({ status: 'gameover', combo: 0, comboMultiplier: 1 });
+      this.setState({ status: 'gameover', lives: this.lives, combo: 0, comboMultiplier: 1 });
       this.onGameOver?.({
         score,
         isNewBest: false,
@@ -882,7 +966,7 @@ export class GameEngine {
       return;
     }
     const { result, best } = this.record(failed);
-    this.setState({ status: 'gameover', highScore: best, combo: 0, comboMultiplier: 1 });
+    this.setState({ status: 'gameover', highScore: best, lives: this.lives, combo: 0, comboMultiplier: 1 });
     this.onGameOver?.(result);
   }
 
@@ -1009,14 +1093,14 @@ export class GameEngine {
 
     if (spec.type === 'rest') return false;
     if (spec.type === 'double' || spec.type === 'doublehold') {
-      // Exactly one lane between the two tiles: lanes 0 & 2, or 1 & 3. A double hold is two holds side by side.
-      const lanes = Math.random() < 0.5 ? [0, 2] : [1, 3];
+      // Two lanes that are not neighbours (see `DOUBLE_LANES`). A double hold is two holds side by side.
+      const lanes = DOUBLE_LANES[Math.floor(Math.random() * DOUBLE_LANES.length)];
       const held = spec.type === 'doublehold';
       const rows = held ? spec.rows : 1;
       const end = held ? time + (rows - 0.5) / timeline.rate(lap) : time;
       const lateWindow = held ? DOUBLE_HOLD_LATE_WINDOW : OK_WINDOW;
       lanes.forEach((lane, i) =>
-        this.addTile({ beat, lane, rows, kind: held ? 'hold' : 'tap', freq: spec.freqs[i], start, time, end, lateWindow }, i === 0),
+        this.addTile({ beat, lane, rows, kind: held ? 'hold' : 'tap', freq: spec.freqs[i], start, time, end, lateWindow }, i === 0 ? lanes[1] - lanes[0] : 0),
       );
       return true;
     }
@@ -1030,7 +1114,7 @@ export class GameEngine {
 
   private addTile(
     spec: Pick<Tile, 'beat' | 'lane' | 'rows' | 'kind' | 'freq' | 'start' | 'time' | 'lateWindow'> & { end: number },
-    link = false,
+    link = 0,
   ): void {
     const tile: Tile = {
       id: `tile-${this.nextId++}`,

@@ -50,10 +50,10 @@ function parseToken(token: string): BeatSpec {
  * Parses a song's melody, written as whitespace-separated tokens. A bar ends at a `|` or at the
  * end of a line:
  *   E4        a tap tile (one row)
- *   C4+E4     a double: two tiles at once, one lane apart (plays both notes)
+ *   C4+E4     a double: two tiles at once, in two lanes that are not neighbours (plays both notes)
  *   G4~       a hold tile, 2 rows tall
  *   G4~3      a hold tile, 3 rows tall (2–4 allowed)
- *   C4+E4~3   a double hold: two hold tiles at once, one lane apart
+ *   C4+E4~3   a double hold: two hold tiles at once, in two lanes that are not neighbours
  *   .         a rest: one row with nothing to tap
  *   .3        a rest three rows long
  * Returns one array of beats per bar.

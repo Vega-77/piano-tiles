@@ -9,9 +9,12 @@ interface TileElements {
 export interface AddOptions {
   /** Hint text on a tap tile (the first tile says "Tap"). */
   label?: string;
-  /** Draw a glowing bar from this tile to its partner two lanes over (doubles). */
-  link?: boolean;
+  /** Draw a glowing bar from this tile to its partner this many lanes over (doubles); 0 for none. */
+  link?: number;
 }
+
+/** How long a red cell shows where a finger came down wrongly, in a run that carries on. */
+const BRIEF_ERROR_MS = 450;
 
 function div(className: string): HTMLDivElement {
   const el = document.createElement('div');
@@ -32,7 +35,7 @@ export class TileRenderer {
     this.layer = layer;
   }
 
-  add(tile: Tile, { label = '', link = false }: AddOptions = {}): void {
+  add(tile: Tile, { label = '', link = 0 }: AddOptions = {}): void {
     const root = div('tile');
     root.dataset.kind = tile.kind;
     root.dataset.state = 'idle';
@@ -41,7 +44,10 @@ export class TileRenderer {
     root.style.height = `${tile.rows * TILE_HEIGHT}%`;
     root.style.setProperty('--rows', String(tile.rows));
 
-    if (link) root.append(div('tile-link'));
+    if (link > 0) {
+      root.style.setProperty('--span', String(link));
+      root.append(div('tile-link'));
+    }
 
     const face = div('tile-face');
     face.append(div('tile-shine'));
@@ -108,8 +114,11 @@ export class TileRenderer {
     this.setState(id, 'miss');
   }
 
-  /** Red cell where the player tapped a blank space or a tile out of order. */
-  showError(lane: number, yPos: number): void {
+  /**
+   * Red cell where the player tapped a blank space or a tile out of order. It stays for good when that ended the run;
+   * otherwise (`brief`) it flashes and goes, as the board carries on.
+   */
+  showError(lane: number, yPos: number, brief = false): void {
     const root = div('tile tile-error');
     root.style.left = `${lane * (100 / LANES)}%`;
     root.style.height = `${TILE_HEIGHT}%`;
@@ -118,6 +127,7 @@ export class TileRenderer {
     face.textContent = '✕';
     root.append(face);
     this.layer.append(root);
+    if (brief) window.setTimeout(() => root.remove(), BRIEF_ERROR_MS);
   }
 
   /** Animate the next draw() instead of snapping (used to reveal a missed tile). */

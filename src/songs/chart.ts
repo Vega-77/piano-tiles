@@ -110,10 +110,10 @@ function parseToken(token: string): BeatSpec {
 /**
  * Parses a chart, written as whitespace-separated tokens (line breaks are only for reading):
  *   x       a tap tile (one row)
- *   xx      a double: two tiles at once, one lane apart
+ *   xx      a double: two tiles at once, in two lanes that are not neighbours
  *   x~      a hold tile, 2 rows tall
  *   x~3     a hold tile, 3 rows tall (2–4 allowed)
- *   xx~     a double hold: two hold tiles at once, one lane apart (xx~3 for 3 rows)
+ *   xx~     a double hold: two hold tiles at once, in two lanes that are not neighbours (xx~3 for 3 rows)
  *   .       a rest: one row with nothing to tap
  *   .12     a rest twelve rows long
  * Neighbouring rests are merged.

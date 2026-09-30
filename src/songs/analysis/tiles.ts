@@ -1,5 +1,5 @@
 import { DOUBLE_HOLDS, MAX_HOLD_ROWS, MIN_HOLD_ROWS } from '../../config';
-import { percentile } from './dsp';
+import { clamp, percentile } from './dsp';
 import { ENV_LAG, FPS, type Features } from './features';
 import { AnalysisError, type Grid, rowLength } from './grid';
 
@@ -27,12 +27,19 @@ interface Settings {
   holds: number;
   /** This share of the holds is turned into a double hold (at least one, if there are two holds). */
   doubleHolds: number;
+  /**
+   * In the most intense stretches of the song this much more of the rows get a tile than `fraction` says (0.4: two in five
+   * more), on hits close to the ones that already have one, which is where the consecutive tiles come from.
+   */
+  surge: number;
+  /** The most tiles in a row, on rows in a row, that a surge may make. */
+  run: number;
 }
 
 export const DENSITY: Record<Density, Settings> = {
-  easy: { gap: 2, fraction: 0.4, doubles: 0.12, holds: 0.12, doubleHolds: 0.25 },
-  medium: { gap: 1, fraction: 0.52, doubles: 0.2, holds: 0.1, doubleHolds: 0.3 },
-  hard: { gap: 1, fraction: 0.66, doubles: 0.28, holds: 0.1, doubleHolds: 0.4 },
+  easy: { gap: 2, fraction: 0.4, doubles: 0.12, holds: 0.12, doubleHolds: 0.25, surge: 0.3, run: 2 },
+  medium: { gap: 1, fraction: 0.52, doubles: 0.2, holds: 0.1, doubleHolds: 0.3, surge: 0.4, run: 3 },
+  hard: { gap: 1, fraction: 0.66, doubles: 0.28, holds: 0.1, doubleHolds: 0.4, surge: 0.5, run: 4 },
 };
 
 /** Fewest rows between two double holds: one is a lot to ask, and they are best not to come in a run. */
@@ -60,6 +67,10 @@ const WINDOW_FLOOR = 0.15;
 const AUDIBLE = 0.15;
 /** How much more a hit on the beat is worth than one between beats when the two compete for a tile. */
 const BEAT_BONUS = 1.2;
+/** The most intense stretch has its turn to take a double 1 + this many times as often as a quiet one. */
+const DOUBLE_SURGE = 2;
+/** A stretch only stands out as intense if the loudest of the song is this much (relative to its median stretch) above the median. */
+const INTENSE_CONTRAST = 0.15;
 
 export type TileKind = 'tap' | 'double' | 'hold' | 'doublehold';
 export interface Tile {
@@ -128,6 +139,43 @@ function rowLoudness(features: Features, grid: Grid, rows: number): Float64Array
   return total;
 }
 
+/**
+ * How intense each stretch of `size` rows is: 0 for an ordinary or quiet one, up to 1 for the loudest and busiest the song
+ * gets (loudness, and how many of the rows have a real hit). It is measured against the song itself, from its median stretch
+ * to its 90th percentile, so a song that is one steady level has none that stand out. Stretches that are silent, or too
+ * few to compare, are 0.
+ */
+function intensities(strength: Float64Array, loudness: Float64Array, rows: number, size: number, loud: number): Float64Array {
+  const stretches = Math.ceil(rows / size);
+  const out = new Float64Array(stretches);
+  const scores: number[] = [];
+  const audible: number[] = [];
+  for (let s = 0; s < stretches; s++) {
+    const from = s * size;
+    const to = Math.min(rows, from + size);
+    let peak = 0;
+    let sound = 0;
+    let hits = 0;
+    for (let k = from; k < to; k++) {
+      peak = Math.max(peak, strength[k]);
+      sound += loudness[k];
+      if (strength[k] >= 0.12 * loud) hits++;
+    }
+    if (peak < AUDIBLE * loud) continue;
+    scores.push((sound / (to - from)) * (1 + hits / (to - from)));
+    audible.push(s);
+  }
+  if (scores.length < 3) return out;
+  const median = percentile(scores, 50);
+  const top = percentile(scores, 90);
+  if (!(top > median) || !(median > 0)) return out;
+  const contrast = Math.min(1, (top - median) / median / INTENSE_CONTRAST);
+  audible.forEach((s, i) => {
+    out[s] = clamp((scores[i] - median) / (top - median), 0, 1) * contrast;
+  });
+  return out;
+}
+
 /** Which of a beat's rows (0 to rowsPerBeat - 1) the hits are strongest on. */
 function beatResidue(strength: Float64Array, rowsPerBeat: number): number {
   const totals = new Float64Array(rowsPerBeat);
@@ -157,10 +205,13 @@ export function beatOffset(features: Features, grid: Grid, rowsPerBeat: number):
 /**
  * Picks which rows get a tile, and which of those are holds and doubles.
  *
- * The tiles go on the strongest hits, in two rounds. First every stretch of the song is given its
+ * The tiles go on the strongest hits, in three rounds. First every stretch of the song is given its
  * share (WINDOW_SHARE) of the average density, on the strongest hits within that stretch, so a
  * quiet verse gets tiles on the hits that are strong for a verse. Then what is left of the total
- * goes to the strongest hits anywhere, which is where a chorus gets its extra.
+ * goes to the strongest hits anywhere, which is where a chorus gets its extra. Last, the most
+ * intense stretches of the song (the loud, busy ones) each get more on top, in the gaps between
+ * the tiles they have, up to `surge` more and never more than `run` on rows in a row: that is
+ * where the consecutive tiles are, and the doubles are dealt out to those stretches more often.
  */
 export function chooseTiles(features: Features, grid: Grid, rows: number, level: Density, rowsPerBeat: number): Tiles {
   const settings = DENSITY[level];
@@ -181,13 +232,16 @@ export function chooseTiles(features: Features, grid: Grid, rows: number, level:
     Array.from({ length: to - from }, (_, i) => from + i).sort((a, b) => worth[b] - worth[a] || a - b);
 
   const blocked = new Uint8Array(rows);
+  const occupied = new Uint8Array(rows);
   const chosen: number[] = [];
   const take = (k: number) => {
     chosen.push(k);
+    occupied[k] = 1;
     blocked.fill(1, Math.max(0, k - gap + 1), Math.min(rows, k + gap)); // (each tile blocks its neighbours)
   };
 
   const size = WINDOW_BEATS * rowsPerBeat;
+  const intensity = intensities(strength, loudness, rows, size, loud);
   for (let from = 0; from < rows; from += size) {
     const to = Math.min(rows, from + size);
     let peak = 0;
@@ -206,6 +260,34 @@ export function chooseTiles(features: Features, grid: Grid, rows: number, level:
   for (const k of best(0, rows)) {
     if (chosen.length >= wanted) break;
     if (!blocked[k] && strength[k] >= floor) take(k);
+  }
+
+  // The surge: intense stretches take more, as close together as the tap rate allows (on Easy, closer than its gap).
+  const closest = Math.max(1, Math.ceil(grid.rate / MAX_TAP_RATE - 1e-9));
+  const clear = (k: number) => {
+    for (let j = Math.max(0, k - closest + 1); j < Math.min(rows, k + closest); j++) if (occupied[j]) return false;
+    return true;
+  };
+  const runWith = (k: number) => {
+    let length = 1;
+    for (let j = k - 1; j >= 0 && occupied[j]; j--) length++;
+    for (let j = k + 1; j < rows && occupied[j]; j++) length++;
+    return length;
+  };
+  for (let s = 0; s < intensity.length; s++) {
+    if (!(intensity[s] > 0)) continue;
+    const from = s * size;
+    const to = Math.min(rows, from + size);
+    let peak = 0;
+    for (let k = from; k < to; k++) peak = Math.max(peak, strength[k]);
+    const extra = Math.round(intensity[s] * settings.surge * settings.fraction * (to - from));
+    let added = 0;
+    for (const k of best(from, to)) {
+      if (added >= extra) break;
+      if (occupied[k] || strength[k] < floor || !clear(k) || runWith(k) > settings.run) continue;
+      take(k);
+      added++;
+    }
   }
   chosen.sort((a, b) => a - b);
   if (chosen.length < MIN_TILES) {
@@ -272,19 +354,33 @@ export function chooseTiles(features: Features, grid: Grid, rows: number, level:
       const stretch = Math.trunc(k / size);
       byStretch.set(stretch, [...(byStretch.get(stretch) ?? []), k]);
     }
+    // (An intense stretch has its turn more often, up to 1 + DOUBLE_SURGE times as often; `credit` is the turns it is owed.)
     const turns = [...byStretch.entries()]
       .sort(([a], [b]) => a - b)
-      .map(([, taps]) => taps.sort((a, b) => agree[b] - agree[a] || strength[b] - strength[a]));
+      .map(([stretch, taps]) => ({
+        taps: taps.sort((a, b) => agree[b] - agree[a] || strength[b] - strength[a]),
+        rate: 1 + DOUBLE_SURGE * (intensity[stretch] ?? 0),
+        credit: 0,
+      }));
     let doubles = 0;
-    while (doubles < doubleCap && turns.some((taps) => taps.length > 0)) {
-      for (const taps of turns) {
-        if (doubles >= doubleCap) break;
-        for (let k = taps.shift(); k !== undefined; k = taps.shift()) {
-          if (doubleRows[k - 1] || doubleRows[k + 1]) continue; // (never two rows of doubles in a row)
-          tokens.set(k, { kind: 'double', rows: 1 });
-          doubleRows[k] = 1;
-          doubles++;
-          break;
+    while (doubles < doubleCap && turns.some((turn) => turn.taps.length > 0)) {
+      for (const turn of turns) {
+        turn.credit += turn.rate;
+        while (turn.credit >= 1 && doubles < doubleCap) {
+          let laid = false;
+          for (let k = turn.taps.shift(); k !== undefined; k = turn.taps.shift()) {
+            if (doubleRows[k - 1] || doubleRows[k + 1]) continue; // (never two rows of doubles in a row)
+            tokens.set(k, { kind: 'double', rows: 1 });
+            doubleRows[k] = 1;
+            doubles++;
+            laid = true;
+            break;
+          }
+          if (!laid) {
+            turn.credit = 0;
+            break;
+          }
+          turn.credit--;
         }
       }
     }

@@ -10,8 +10,10 @@ export interface GameState {
   songId: string;
   /** 0–1: how far through the current lap of the song. */
   progress: number;
-  /** The chain: perfect hits in a row (a good hit keeps it going without adding to it). */
+  /** The chain: perfect hits in a row (anything early or late, or a mistake, breaks it). */
   combo: number;
+  /** Lives left: a mistake costs one, and the run is over when none are. */
+  lives: number;
   /** Points multiplier earned by the current chain of perfects. */
   comboMultiplier: number;
   /** Completed laps of the song; each one makes the tiles faster. */
@@ -68,10 +70,10 @@ export interface Tile {
 /** One step of a song's melody, before it is given lanes and a position. */
 export type BeatSpec =
   | { type: 'tap'; freq: number }
-  /** Two tiles in the same row with exactly one lane between them. */
+  /** Two tiles in the same row, in two lanes that are not neighbours (they are picked when the tile is laid out). */
   | { type: 'double'; freqs: [number, number] }
   | { type: 'hold'; freq: number; rows: number }
-  /** Two hold tiles in the same row with exactly one lane between them: both are pressed and held. */
+  /** Two hold tiles in the same row, in two lanes that are not neighbours: both are pressed and held. */
   | { type: 'doublehold'; freqs: [number, number]; rows: number }
   /** A gap: nothing to tap for this many rows. */
   | { type: 'rest'; rows: number };

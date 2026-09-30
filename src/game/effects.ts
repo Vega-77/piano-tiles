@@ -8,6 +8,14 @@ export interface BarZone {
   good: number;
 }
 
+/** What a popup says beside its text: a second line, a colour (from a judgment, or a hue of its own) and an early/late pill. */
+export interface PopupOptions {
+  sub?: string;
+  judgment?: Judgment;
+  hue?: number;
+  timing?: 'early' | 'late';
+}
+
 /** What the engine needs from the visual-effects layer, so tests can swap in a no-op. */
 export interface Fx {
   setTheme(hue: number, hue2: number): void;
@@ -18,7 +26,7 @@ export interface Fx {
   /** A tile was tapped: its head is at (x, y), both percent of board size. */
   hit(x: number, y: number, lane: number, judgment: Judgment): void;
   /** Text that floats up from (x, y); `timing` adds a coloured EARLY / LATE tag between the text and `sub`. */
-  popup(text: string, x: number, y: number, options?: { sub?: string; judgment?: Judgment; timing?: 'early' | 'late' }): void;
+  popup(text: string, x: number, y: number, options?: PopupOptions): void;
   /** Big centred text that fades out, e.g. "Get ready" or "Lap 2". */
   banner(text: string, sub?: string): void;
   /** One big count-in number ("4", "3", …) that pops and fades; a new one replaces the last. */
@@ -172,9 +180,11 @@ export class Effects implements Fx {
     this.pulse(judgment === 'perfect' ? 0.4 : 0.2);
   }
 
-  popup(text: string, x: number, y: number, options: { sub?: string; judgment?: Judgment; timing?: 'early' | 'late' } = {}): void {
+  popup(text: string, x: number, y: number, options: PopupOptions = {}): void {
     const { width, height } = this.fxSize();
-    const hue = options.judgment === undefined ? this.hue : options.judgment === 'good' ? this.hue : JUDGMENT_HUE[options.judgment];
+    const hue =
+      options.hue ??
+      (options.judgment === undefined ? this.hue : options.judgment === 'good' ? this.hue : JUDGMENT_HUE[options.judgment]);
     this.popups.push({ text, sub: options.sub ?? '', timing: options.timing ?? null, x: (x / 100) * width, y: (y / 100) * height, age: 0, hue });
   }
 
