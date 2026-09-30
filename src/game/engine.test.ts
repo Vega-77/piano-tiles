@@ -19,8 +19,8 @@ import { beatRows } from '../songs/notation';
 import type { BeatSpec, GameState, MusicEvent, Recording, Song, Tile } from '../types';
 import type { Sound } from './audio';
 import { noopFx, type Fx } from './effects';
-import { comboMultiplier, GameEngine, judge, type GameOverResult } from './engine';
-import { getBest } from './storage';
+import { comboMultiplier, continueScore, GameEngine, judge, type GameOverResult } from './engine';
+import { getBest, loadStats } from './storage';
 import { Timeline } from './timeline';
 import { listenToTrace } from './trace';
 
@@ -665,6 +665,7 @@ describe('failing', () => {
     tapAt(engine, firstTile(engine), 0);
     goTo(engine.getTiles()[0].time + 5);
     expect(engine.getState().status).toBe('gameover');
+    engine.finish(); // (a run with something to continue on is only saved once that is turned down)
     expect(getBest('test')).toBe(POINTS.perfect);
   });
 
@@ -1517,6 +1518,270 @@ describe('counting in, on the way in and after a pause', () => {
       expect(again.notBefore).toBeCloseTo(203.5, 6); // where the song moves again
       // It is timed so the recording's beat grid lands where the rows will: 0.13s before row 0.
       expect(again.at).toBeCloseTo(t0 - 0.13 + (203.5 - (t0 + 1.1)), 6);
+    });
+  });
+});
+
+describe('continuing a failed run', () => {
+  /** What the effects were told, so the count-in numbers and the banner can be read off. */
+  function watched(options: SetupOptions & { beats?: BeatSpec[] } = {}) {
+    const counts: string[] = [];
+    const banners: string[] = [];
+    const effects: Fx = { ...noopFx, count: (text) => counts.push(text), banner: (title) => banners.push(title) };
+    // (Sixteen taps a lap, a row each, in two bars of eight rows: the ninth tap starts the second bar.)
+    const { beats = manyTaps(16), ...rest } = options;
+    return { ...setup(beats, { effects, ...rest }), counts, banners };
+  }
+
+  /** Where the run has got to: the beat of the lowest tile not yet cleared. */
+  const beatNow = (engine: GameEngine): number => nextBeat(engine)[0]?.beat ?? -1;
+
+  /** Clear tiles perfectly until the next one is on `beat`, then let that one go by: the run fails on it. */
+  function fallOn(made: ReturnType<typeof watched>, beat: number): void {
+    playPerfectly(made.engine, () => beatNow(made.engine) >= beat);
+    stepUntilOver(made.engine);
+    expect(made.engine.getState().status).toBe('gameover');
+  }
+
+  const plays = () => loadStats().test?.plays ?? 0;
+
+  describe('the offer', () => {
+    it('comes with the first fall of a run that has scored, at a quarter off, and saves nothing yet', () => {
+      const made = watched();
+      fallOn(made, 2);
+      const { engine, results } = made;
+      const score = engine.getState().score;
+      expect(score).toBeGreaterThan(0);
+      expect(engine.canContinue()).toBe(true);
+      expect(results).toEqual([expect.objectContaining({ score, isNewBest: false, reason: 'miss', continueScore: continueScore(score) })]);
+      expect(continueScore(score)).toBe(Math.round(score * 0.75));
+      expect(getBest('test')).toBe(0);
+      expect(plays()).toBe(0);
+    });
+
+    it('is not made to a run that has not scored: there is nothing to keep', () => {
+      const made = watched();
+      goTo(firstTile(made.engine).time + 5);
+      expect(made.engine.getState().status).toBe('gameover');
+      expect(made.engine.canContinue()).toBe(false);
+      expect(made.results).toEqual([expect.objectContaining({ score: 0, continueScore: null })]);
+      expect(plays()).toBe(1);
+    });
+
+    it('takes a share of the score and leaves the rest', () => {
+      expect(continueScore(0)).toBe(0);
+      expect(continueScore(400)).toBe(300);
+      expect(continueScore(101)).toBe(76);
+    });
+
+    it('is turned down with finish, which saves the run once and tells how it went', () => {
+      const made = watched();
+      fallOn(made, 3);
+      const { engine, results } = made;
+      const score = engine.getState().score;
+      engine.finish();
+      expect(results).toHaveLength(2);
+      expect(results[1]).toMatchObject({ score, isNewBest: true, reason: 'miss', continueScore: null });
+      expect(results[1].stats.maxChain).toBe(3);
+      expect(getBest('test')).toBe(score);
+      expect(engine.getState()).toMatchObject({ status: 'gameover', score, highScore: score });
+      expect(engine.canContinue()).toBe(false);
+
+      engine.finish();
+      engine.continueRun();
+      expect(results).toHaveLength(2);
+      expect(plays()).toBe(1);
+      expect(engine.getState().status).toBe('gameover');
+    });
+
+    it('does nothing while the game is being played', () => {
+      const { engine, calls, results } = watched();
+      const started = calls.started;
+      engine.finish();
+      engine.continueRun();
+      expect(engine.getState().status).toBe('playing');
+      expect(calls.started).toBe(started);
+      expect(results).toHaveLength(0);
+      expect(plays()).toBe(0);
+    });
+
+    it('is saved after all when the player leaves it unanswered, by quitting or starting over', () => {
+      const quitting = watched();
+      fallOn(quitting, 3);
+      const score = quitting.engine.getState().score;
+      quitting.engine.quit();
+      expect(getBest('test')).toBe(score);
+      expect(plays()).toBe(1);
+      quitting.engine.quit();
+      expect(plays()).toBe(1);
+
+      const again = watched();
+      fallOn(again, 2);
+      songTime = 900;
+      again.engine.start(again.song);
+      expect(plays()).toBe(2);
+      expect(again.engine.canContinue()).toBe(false);
+    });
+  });
+
+  describe('carrying on', () => {
+    it('goes back into the bar it fell in, through a count-in: score cut, chain gone, best chain kept', () => {
+      const made = watched();
+      fallOn(made, 10); // (the tenth tap is in the second bar, which starts at row 8)
+      const { engine, timeline, scheduled, counts, banners, results } = made;
+      const before = engine.getState();
+      expect(before.comboMultiplier).toBe(1); // (a fall breaks the chain, and the offer says so)
+      const score = before.score;
+      expect(score).toBeGreaterThan(0);
+
+      songTime = 300;
+      counts.length = 0;
+      const heard = scheduled.length;
+      engine.continueRun();
+
+      expect(engine.getState()).toMatchObject({
+        status: 'playing', score: continueScore(score), combo: 0, comboMultiplier: 1, lap: 0, paused: false,
+      });
+      expect(engine.canContinue()).toBe(false);
+      expect(banners).toContain('Second chance');
+      // The bar's own tiles are laid out again, from its first tap, and the ones before it were played: they are not on the board.
+      expect(firstTile(engine).beat).toBe(8);
+      expect(firstTile(engine).time).toBeCloseTo(timeline.arrival(0, 8), 9);
+      expect(engine.getTiles().every((tile) => !tile.isHit)).toBe(true);
+      // Nothing is saved by continuing: the run is not over.
+      expect(results).toHaveLength(1);
+      expect(plays()).toBe(0);
+
+      // Four ticks a beat apart lead the way, the first of them a moment after the click, and the numbers show as they sound.
+      const ticks = scheduled.slice(heard);
+      expect(ticks.map((s) => s.event.kind)).toEqual(['kick', 'hat', 'hat', 'hat', 'hat']);
+      ticks.forEach((tick, i) => expect(tick.at).toBeCloseTo(300.4 + Math.max(0, i - 1), 9));
+      runTo(303.5);
+      expect(counts).toEqual(['4', '3', '2', '1']);
+      runTo(304.6);
+      expect(counts).toEqual(['4', '3', '2', '1']); // (and not again as the song's own count-in numbers would come)
+
+      // The chain starts from ×1 again: the first perfect is worth what a perfect is worth, no more.
+      const tile = firstTile(engine);
+      goTo(305.4);
+      expect(centre(tile)).toBeCloseTo(BAR_Y, 6);
+      engine.press(tile.lane, 'p1');
+      expect(engine.getState().score).toBe(continueScore(score) + POINTS.perfect);
+      expect(engine.getState().comboMultiplier).toBe(1);
+    });
+
+    it('holds the song still through the count, and ignores taps until it is over', () => {
+      const made = watched();
+      fallOn(made, 10);
+      const { engine } = made;
+      songTime = 300;
+      engine.continueRun();
+      const tile = firstTile(engine);
+      const y = tile.yPos;
+      const score = engine.getState().score;
+      runTo(304.3); // (the song moves again at 304.4)
+      expect(tile.yPos).toBeCloseTo(y, 9);
+      engine.press(tile.lane, 'p9');
+      engine.press((tile.lane + 1) % 4, 'p8'); // not even a wrong lane counts
+      expect(engine.getState()).toMatchObject({ status: 'playing', score });
+      runTo(304.9);
+      expect(tile.yPos).toBeGreaterThan(y);
+    });
+
+    it("goes back to the start of a lap through the lap's own count-in when it fell in the first bar", () => {
+      const made = watched();
+      fallOn(made, 2);
+      const { engine, timeline, scheduled, counts } = made;
+      const score = engine.getState().score;
+      songTime = 300;
+      counts.length = 0;
+      const heard = scheduled.length;
+      engine.continueRun();
+      expect(engine.getState()).toMatchObject({ status: 'playing', score: continueScore(score), combo: 0, comboMultiplier: 1 });
+      expect(engine.getTiles()).toHaveLength(0); // (the board stays empty through the count-in, as it does at the start)
+
+      runTo(304);
+      expect(firstTile(engine).beat).toBe(0);
+      expect(firstTile(engine).time).toBeCloseTo(timeline.arrival(0, 0), 9);
+      const ticks = scheduled.slice(heard).filter((s) => s.event.kind === 'kick' || s.event.kind === 'hat');
+      expect(ticks.map((s) => s.event.kind).slice(0, 5)).toEqual(['kick', 'hat', 'hat', 'hat', 'hat']);
+      ticks.slice(0, 5).forEach((tick, i) => expect(tick.at).toBeCloseTo(300.4 + Math.max(0, i - 1), 9));
+      expect(counts).toEqual(['4', '3', '2', '1']);
+
+      const tile = firstTile(engine);
+      goTo(304.4); // (the first tile, four beats of count-in after the song moves again)
+      expect(centre(tile)).toBeCloseTo(BAR_Y, 6);
+      engine.press(tile.lane, 'p1');
+      expect(engine.getState().score).toBe(continueScore(score) + POINTS.perfect);
+    });
+
+    it("carries on in the lap it fell in, at that lap's speed", () => {
+      const made = watched();
+      playPerfectly(made.engine, () => made.engine.getState().lap >= 1);
+      throughBreak(made.engine);
+      fallOn(made, 16 + 10);
+      const { engine, timeline } = made;
+      expect(engine.getState().lap).toBe(1);
+      const score = engine.getState().score;
+      songTime = 900;
+      engine.continueRun();
+      expect(engine.getState()).toMatchObject({ status: 'playing', score: continueScore(score), lap: 1 });
+      expect(engine.getState().speedMultiplier).toBeCloseTo(speed(1), 2);
+      expect(firstTile(engine).beat).toBe(16 + 8);
+      expect(firstTile(engine).time).toBeCloseTo(timeline.arrival(1, 8), 9);
+      runTo(903.5); // (still counting in: nothing is due until 904.6, a beat after the song moves again at 903.7)
+      expect(engine.getState().status).toBe('playing');
+    });
+
+    it('is only possible once: the next fall ends the run, and saves it', () => {
+      const made = watched();
+      fallOn(made, 10);
+      const { engine, results } = made;
+      songTime = 300;
+      engine.continueRun();
+      const taxed = engine.getState().score;
+      stepUntilOver(engine, 1200);
+      expect(engine.getState().status).toBe('gameover');
+      expect(engine.canContinue()).toBe(false);
+      expect(results).toHaveLength(2);
+      expect(results[1]).toMatchObject({ score: taxed, continueScore: null, reason: 'miss' });
+      expect(results[1].stats.maxChain).toBe(10); // (the chain reached before the fall still counts)
+      expect(getBest('test')).toBe(taxed);
+      expect(plays()).toBe(1);
+      engine.continueRun();
+      expect(engine.getState().status).toBe('gameover');
+    });
+
+    it('is possible again in a new run', () => {
+      const made = watched();
+      fallOn(made, 10);
+      songTime = 300;
+      made.engine.continueRun();
+      stepUntilOver(made.engine, 1200);
+      expect(made.engine.canContinue()).toBe(false);
+
+      songTime = 2000;
+      made.engine.start(made.song);
+      goTo(2002.5); // (the first tap is due at 2004)
+      fallOn(made, 2);
+      expect(made.engine.canContinue()).toBe(true);
+    });
+
+    it('hands a recorded song back held until the count is over, and lined up with the rows', () => {
+      const recording: Recording = { url: 'songs/demo/audio.mp3', offset: 0.13, duration: 4.2, end: 3.5 };
+      const made = watched({ recording });
+      fallOn(made, 10);
+      const { engine, played, timeline } = made;
+      expect(played).toHaveLength(1);
+      songTime = 300;
+      engine.continueRun();
+      runTo(300.1);
+
+      expect(played).toHaveLength(2);
+      expect(played[1]).toMatchObject({ url: recording.url, rate: 1, end: 3.5 });
+      expect(played[1].notBefore).toBeCloseTo(304.4, 6); // where the song moves again
+      // Row 6 (the beat before the bar) is on the clock where the song was held, so the recording is timed to row 0 from there.
+      expect(played[1].at).toBeCloseTo(timeline.lapStart(0) - 0.13 + (304.4 - timeline.arrival(0, 6)), 6);
     });
   });
 });

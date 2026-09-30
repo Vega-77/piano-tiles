@@ -81,8 +81,13 @@ export function useGame(songs: readonly Song[], prepare?: Prepare) {
           if (paused) engine.resume();
           else engine.pause();
         } else if (status === 'gameover') {
-          setLastRun(null);
-          engine.quit();
+          // (While the run can still be continued, that is what Escape turns down; leaving is the next press.)
+          if (engine.canContinue()) {
+            engine.finish();
+          } else {
+            setLastRun(null);
+            engine.quit();
+          }
         }
         return;
       }
@@ -152,6 +157,15 @@ export function useGame(songs: readonly Song[], prepare?: Prepare) {
     engineRef.current?.quit();
   }, []);
 
+  /** Carry a failed run on from the bar it fell in, at a cost. */
+  const continueRun = useCallback(() => {
+    setLastRun(null);
+    engineRef.current?.continueRun();
+  }, []);
+
+  /** Turn down the chance to continue: the run is over and counts. */
+  const finish = useCallback(() => engineRef.current?.finish(), []);
+
   const pause = useCallback(() => engineRef.current?.pause(), []);
   const resume = useCallback(() => engineRef.current?.resume(), []);
 
@@ -186,6 +200,8 @@ export function useGame(songs: readonly Song[], prepare?: Prepare) {
     refs: { bgRef, fxRef, stageRef, boardRef, layerRef },
     start,
     quit,
+    continueRun,
+    finish,
     pause,
     resume,
     handlePointerDown,

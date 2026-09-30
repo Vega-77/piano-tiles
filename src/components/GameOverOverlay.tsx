@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { GAME_OVER_REVEAL_MS } from '../config';
+import { CONTINUE_SCORE_COST, GAME_OVER_REVEAL_MS } from '../config';
 import type { FailReason, GameOverResult } from '../game/engine';
 import { DIFFICULTY_LABELS } from '../songs/songs';
 import type { Song } from '../types';
@@ -46,6 +46,12 @@ export function reasonText(result: Pick<GameOverResult, 'reason' | 'by'>): strin
     : `You tapped ${result.by} ms too late`;
 }
 
+/** What continuing costs, in words: a share of the score is taken, and the chain starts over. */
+export function offerText(score: number, kept: number): string {
+  const share = Math.round(CONTINUE_SCORE_COST * 100);
+  return `You keep ${kept.toLocaleString()} of your ${score.toLocaleString()} points (${share}% is taken), your chain starts over, and a count-in leads you back into the bar you fell in. This can only be done once per run.`;
+}
+
 interface GameOverOverlayProps {
   song: Song;
   score: number;
@@ -53,17 +59,23 @@ interface GameOverOverlayProps {
   result: GameOverResult | null;
   /** Under the stats: what the run did for the leaderboard (a name to ask for, or where it landed). */
   standing?: ReactNode;
+  /** Take the offer to carry on (while the result has a score to go on with). */
+  onContinue: () => void;
+  /** Turn the offer down, which ends the run. */
+  onFinish: () => void;
   onRestart: () => void;
   onMenu: () => void;
 }
 
-export function GameOverOverlay({ song, score, best, result, standing, onRestart, onMenu }: GameOverOverlayProps) {
+export function GameOverOverlay({ song, score, best, result, standing, onContinue, onFinish, onRestart, onMenu }: GameOverOverlayProps) {
   // Hold the panel back briefly so the player can see what went wrong, and so a
   // frantic last tap can't land on a button.
   const [ready, setReady] = useState(false);
   const restartRef = useRef<HTMLButtonElement>(null);
   const shownScore = useCountUp(ready ? score : 0);
   const stats = result?.stats;
+  /** The score the run could go on with, while it still can: the run is not over until that is turned down. */
+  const kept = result?.continueScore ?? null;
 
   useEffect(() => {
     const id = window.setTimeout(() => setReady(true), GAME_OVER_REVEAL_MS);
@@ -72,7 +84,7 @@ export function GameOverOverlay({ song, score, best, result, standing, onRestart
 
   useEffect(() => {
     if (ready) restartRef.current?.focus();
-  }, [ready]);
+  }, [ready, kept === null]);
 
   return (
     <div
@@ -93,48 +105,78 @@ export function GameOverOverlay({ song, score, best, result, standing, onRestart
 
         <p className="title-gradient text-7xl font-black tabular-nums leading-none">{shownScore.toLocaleString()}</p>
 
-        {result?.isNewBest ? (
-          <p className="badge-new-best rounded-full px-5 py-1.5 text-sm font-black uppercase tracking-widest text-zinc-950">
-            New best!
-          </p>
+        {kept !== null ? (
+          <>
+            <div className="w-full rounded-2xl bg-white/[0.07] px-4 py-3 text-sm ring-1 ring-white/10">
+              <p className="font-bold text-white">Carry on from where you fell?</p>
+              <p className="mt-1 text-xs leading-snug text-white/60">{offerText(score, kept)}</p>
+            </div>
+            <div className="flex w-full flex-col gap-3">
+              <button
+                ref={restartRef}
+                type="button"
+                onClick={onContinue}
+                disabled={!ready}
+                className="btn-primary rounded-full px-10 py-4 text-lg font-extrabold text-white"
+              >
+                Continue with {kept.toLocaleString()}
+              </button>
+              <button
+                type="button"
+                onClick={onFinish}
+                disabled={!ready}
+                className="btn-ghost rounded-full px-10 py-3 text-base font-bold text-white/90"
+              >
+                No thanks, keep {score.toLocaleString()}
+              </button>
+            </div>
+          </>
         ) : (
-          <p className="text-sm uppercase tracking-widest text-white/50">
-            Best <span className="ml-2 text-xl font-bold tabular-nums text-white">{best.toLocaleString()}</span>
-          </p>
+          <>
+            {result?.isNewBest ? (
+              <p className="badge-new-best rounded-full px-5 py-1.5 text-sm font-black uppercase tracking-widest text-zinc-950">
+                New best!
+              </p>
+            ) : (
+              <p className="text-sm uppercase tracking-widest text-white/50">
+                Best <span className="ml-2 text-xl font-bold tabular-nums text-white">{best.toLocaleString()}</span>
+              </p>
+            )}
+
+            {stats && (
+              <div className="grid w-full grid-cols-3 gap-2">
+                <Stat label="Perfect" value={stats.perfect} tone="hsl(48 100% 70%)" />
+                <Stat label="Good" value={stats.good} tone="hsl(160 90% 65%)" />
+                <Stat label="Ok" value={stats.ok} tone="hsl(215 90% 75%)" />
+                <Stat label="Best chain" value={stats.maxChain} />
+                <Stat label="Tiles" value={stats.tiles} />
+                <Stat label="Laps" value={stats.laps} />
+              </div>
+            )}
+
+            {standing}
+
+            <div className="mt-1 flex w-full flex-col gap-3">
+              <button
+                ref={restartRef}
+                type="button"
+                onClick={onRestart}
+                disabled={!ready}
+                className="btn-primary rounded-full px-10 py-4 text-lg font-extrabold text-white"
+              >
+                Play again
+              </button>
+              <button
+                type="button"
+                onClick={onMenu}
+                disabled={!ready}
+                className="btn-ghost rounded-full px-10 py-3 text-base font-bold text-white/90"
+              >
+                Choose another song
+              </button>
+            </div>
+          </>
         )}
-
-        {stats && (
-          <div className="grid w-full grid-cols-3 gap-2">
-            <Stat label="Perfect" value={stats.perfect} tone="hsl(48 100% 70%)" />
-            <Stat label="Good" value={stats.good} tone="hsl(160 90% 65%)" />
-            <Stat label="Ok" value={stats.ok} tone="hsl(215 90% 75%)" />
-            <Stat label="Best chain" value={stats.maxChain} />
-            <Stat label="Tiles" value={stats.tiles} />
-            <Stat label="Laps" value={stats.laps} />
-          </div>
-        )}
-
-        {standing}
-
-        <div className="mt-1 flex w-full flex-col gap-3">
-          <button
-            ref={restartRef}
-            type="button"
-            onClick={onRestart}
-            disabled={!ready}
-            className="btn-primary rounded-full px-10 py-4 text-lg font-extrabold text-white"
-          >
-            Play again
-          </button>
-          <button
-            type="button"
-            onClick={onMenu}
-            disabled={!ready}
-            className="btn-ghost rounded-full px-10 py-3 text-base font-bold text-white/90"
-          >
-            Choose another song
-          </button>
-        </div>
       </div>
     </div>
   );

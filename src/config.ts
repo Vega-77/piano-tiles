@@ -24,6 +24,12 @@ export const LAP_SPEED_STEP = 0.2;
 export const LAP_REST_SECONDS = 1.5;
 export const COUNT_IN_BEATS = 4;
 
+/**
+ * A run that has failed can be picked up again, once, from the start of the bar it fell in, after a count-in. That costs
+ * this share of the score (the rest is kept) and the chain: the points multiplier starts over from ×1.
+ */
+export const CONTINUE_SCORE_COST = 0.25;
+
 // Timing windows: seconds either side of the moment a tile is centred on the bar.
 export const PERFECT_WINDOW = 0.1;
 export const GOOD_WINDOW = 0.18;

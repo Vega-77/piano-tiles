@@ -2,6 +2,7 @@ import {
   BAR_Y,
   COMBO_MAX_MULTIPLIER,
   COMBO_STEP,
+  CONTINUE_SCORE_COST,
   COUNT_IN_BEATS,
   DOUBLE_HOLD_LATE_WINDOW,
   DOUBLE_TAP_GUARD,
@@ -43,6 +44,23 @@ export interface GameOverResult {
   /** For a tap that missed (`early`, or a `miss` that was a late tap): how far off it was, in milliseconds. */
   by?: number;
   stats: RunStats;
+  /**
+   * While the run can still be picked up where it fell: the score it would go on with. The run is not over, and not saved,
+   * until that is turned down (`finish`); then this is null.
+   */
+  continueScore: number | null;
+}
+
+/** What ended a run, as the result tells it. */
+interface Failed {
+  reason: FailReason;
+  by?: number;
+}
+
+/** Where a failed run can go on from: the lap, and the row of the lap at which the bar it fell in begins. */
+interface RestartPoint {
+  lap: number;
+  bar: number;
 }
 
 interface EngineOptions {
@@ -102,6 +120,11 @@ export function createInitialState(): GameState {
     lap: 0,
     paused: false,
   };
+}
+
+/** The score a run goes on with after a continue: what is left once the cost has been taken. */
+export function continueScore(score: number): number {
+  return Math.round(score * (1 - CONTINUE_SCORE_COST));
 }
 
 /** Points multiplier for a chain of consecutive perfects. */
@@ -181,6 +204,10 @@ export class GameEngine {
   private lastFrameAt = 0;
   /** The last beat the `?input` readout was told was due. */
   private announcedBeat = -1;
+  /** A failed run that can still be continued: where from, and how it failed (which is told once it is over). */
+  private offer: (RestartPoint & { failed: Failed }) | null = null;
+  /** Whether this run has been continued already: it only can be once. */
+  private continued = false;
 
   constructor(options: EngineOptions) {
     this.renderer = new TileRenderer(options.layer);
@@ -200,6 +227,7 @@ export class GameEngine {
 
   start(song: Song): void {
     cancelAnimationFrame(this.rafId);
+    this.bank();
     this.audio.unlock();
     this.audio.startSong();
     this.renderer.clear();
@@ -233,6 +261,7 @@ export class GameEngine {
     this.lastCleared = null;
     this.lastFrameAt = 0;
     this.announcedBeat = -1;
+    this.continued = false;
 
     this.effects.setTheme(song.hue, song.hue2);
     this.effects.setEnergy(0);
@@ -262,6 +291,7 @@ export class GameEngine {
   /** Abandon the current run and go back to the song list. */
   quit(): void {
     cancelAnimationFrame(this.rafId);
+    this.bank();
     this.audio.stopSong();
     this.renderer.clear();
     this.tiles = [];
@@ -323,14 +353,122 @@ export class GameEngine {
     this.recordedLap = lap;
     this.musicCursor = this.cursorAt(lap, into);
     this.resumeTicks = [];
-    if (needsCount) {
-      for (let tick = 0; tick < COUNT_IN_BEATS; tick++) {
-        const when = now + RESUME_MARGIN + tick * beat;
-        for (const event of tick === 0 ? COUNT_IN_FIRST : COUNT_IN) this.audio.schedule(event, when, beat / perBeat);
-        this.resumeTicks.push({ at: when, label: String(COUNT_IN_BEATS - tick) });
-      }
-    }
+    if (needsCount) this.tickCountIn(now, beat);
     this.setState({ paused: false });
+  }
+
+  /** Play the four ticks of a count-in that holds the song still (after a pause, or a continue), a beat apart from `RESUME_MARGIN` on. */
+  private tickCountIn(now: number, beat: number): void {
+    const perBeat = this.song?.rowsPerBeat ?? 1;
+    this.resumeTicks = [];
+    for (let tick = 0; tick < COUNT_IN_BEATS; tick++) {
+      const when = now + RESUME_MARGIN + tick * beat;
+      for (const event of tick === 0 ? COUNT_IN_FIRST : COUNT_IN) this.audio.schedule(event, when, beat / perBeat);
+      this.resumeTicks.push({ at: when, label: String(COUNT_IN_BEATS - tick) });
+    }
+  }
+
+  /** Whether the run that has just failed can still be picked up where it fell (see `continueRun`). */
+  canContinue(): boolean {
+    return this.state.status === 'gameover' && this.offer !== null;
+  }
+
+  /**
+   * Pick a failed run up again, once: the score loses `CONTINUE_SCORE_COST` of itself, the chain starts over, and the song
+   * goes back to the start of the bar it fell in. It is held still through a count-in first, like a resume, so the board
+   * (laid out again from that bar) and the music come back together.
+   *
+   * A bar that starts a lap is gone back to through the lap's own count-in, which is already the way into it. Any other bar
+   * has the beat before it left on the board, and four ticks of count-in that end a beat before that beat is over.
+   */
+  continueRun(): void {
+    const { song, timeline, offer } = this;
+    if (this.state.status !== 'gameover' || !offer || !song || !timeline) return;
+    this.offer = null;
+    this.continued = true;
+
+    const { lap, bar } = offer;
+    const perBeat = song.rowsPerBeat;
+    const beat = perBeat / timeline.rate(lap);
+    const counted = bar > 0;
+    const into = counted ? Math.max(0, bar - perBeat) : -this.countInRows(song);
+    const at = timeline.arrival(lap, into);
+
+    this.audio.startSong();
+    const now = this.audio.now();
+    this.frozenAt = at;
+    this.holdUntil = now + RESUME_MARGIN + (counted ? COUNT_IN_BEATS * beat : 0);
+    this.shift = this.holdUntil - at;
+    this.recordedLap = lap;
+    this.musicCursor = this.cursorAt(lap, into);
+    this.cue = counted ? COUNT_IN_BEATS : 0;
+    this.resumeTicks = [];
+    if (counted) this.tickCountIn(now, beat);
+
+    // The board is laid out again from the bar (not the beats before it: they were played), with new lanes.
+    this.renderer.clear();
+    this.tiles = [];
+    const first = this.beatStarts.findIndex((start) => start >= bar);
+    this.spawnCursor = lap * this.beatStarts.length + Math.max(0, first);
+    this.lap = lap;
+    this.stats.laps = lap;
+    this.combo = 0;
+    this.lastCleared = null;
+    this.announcedBeat = -1;
+    this.lastFrameAt = 0;
+    this.sync(at);
+    this.fillAbove();
+    this.refreshTargets();
+    this.draw();
+
+    const score = continueScore(this.state.score);
+    this.effects.setBar(this.barZone());
+    this.effects.setEnergy(this.energy());
+    this.effects.banner('Second chance', `−${this.state.score - score} points, and the chain starts over`);
+    this.setState({
+      status: 'playing',
+      score,
+      combo: 0,
+      comboMultiplier: 1,
+      lap,
+      speedMultiplier: Math.round(timeline.speedFactor(lap) * 100) / 100,
+      progress: this.progress(),
+      paused: false,
+    });
+    this.rafId = requestAnimationFrame(this.frame);
+  }
+
+  /** Turn down the chance to continue: the run is over, is saved, and its result is told. */
+  finish(): void {
+    const offer = this.offer;
+    if (this.state.status !== 'gameover' || !offer) return;
+    this.offer = null;
+    const { result, best } = this.record(offer.failed);
+    this.setState({ highScore: best });
+    this.onGameOver?.(result);
+  }
+
+  /** Save a run that was left with its chance to continue unused, when the game moves on without it being turned down. */
+  private bank(): void {
+    const offer = this.offer;
+    this.offer = null;
+    if (offer) this.record(offer.failed);
+  }
+
+  /** Save the run in its best-scores record, and say how it went. */
+  private record(failed: Failed): { result: GameOverResult; best: number } {
+    const { score, songId } = this.state;
+    const { stats, isNewBest } = recordRun(songId, { score, maxChain: this.stats.maxChain, laps: this.lap });
+    const result: GameOverResult = {
+      score,
+      isNewBest,
+      songId,
+      reason: failed.reason,
+      by: failed.by,
+      stats: { ...this.stats, laps: this.lap },
+      continueScore: null,
+    };
+    return { result, best: stats.best };
   }
 
   destroy(): void {
@@ -546,6 +684,7 @@ export class GameEngine {
   private showCount(now: number): void {
     const { song, timeline } = this;
     if (!song || !timeline) return;
+    if (this.counting()) return; // (the song is held still: the numbers come as it moves again)
     const first = -this.countInRows(song);
     let shown = -1;
     while (this.cue < COUNT_IN_BEATS && now >= timeline.arrival(this.lap, first + this.cue * song.rowsPerBeat)) {
@@ -699,6 +838,7 @@ export class GameEngine {
     if (this.state.status !== 'playing') return;
     cancelAnimationFrame(this.rafId);
     this.audio.stopSong();
+    const beat = this.targetBeat();
 
     let x = 50;
     let y = BAR_Y;
@@ -722,11 +862,37 @@ export class GameEngine {
     this.audio.playError();
     this.effects.fail(x, y);
 
-    const { score, songId } = this.state;
-    const { stats, isNewBest } = recordRun(songId, { score, maxChain: this.stats.maxChain, laps: this.lap });
-    this.setState({ status: 'gameover', highScore: stats.best, combo: 0, comboMultiplier: 1 });
     const by = failure.kind === 'early' ? failure.by : failure.kind === 'miss' ? failure.late : undefined;
-    this.onGameOver?.({ score, isNewBest, songId, reason: failure.kind, by, stats: { ...this.stats, laps: this.lap } });
+    const failed: Failed = { reason: failure.kind, by };
+    const point = this.continued || this.state.score <= 0 ? null : this.restartPoint(beat);
+    if (point) {
+      // The run isn't over yet: it can be picked up again, and until that is turned down nothing about it is saved.
+      this.offer = { ...point, failed };
+      const { score, songId } = this.state;
+      this.setState({ status: 'gameover', combo: 0, comboMultiplier: 1 });
+      this.onGameOver?.({
+        score,
+        isNewBest: false,
+        songId,
+        reason: failed.reason,
+        by,
+        stats: { ...this.stats, laps: this.lap },
+        continueScore: continueScore(score),
+      });
+      return;
+    }
+    const { result, best } = this.record(failed);
+    this.setState({ status: 'gameover', highScore: best, combo: 0, comboMultiplier: 1 });
+    this.onGameOver?.(result);
+  }
+
+  /** Where a run that failed on `beat` can go on from: the start of the bar that beat is in. */
+  private restartPoint(beat: number): RestartPoint | null {
+    const { song } = this;
+    const count = this.beatStarts.length;
+    if (!song || !this.timeline || beat < 0 || count === 0) return null;
+    const start = this.beatStarts[beat % count];
+    return { lap: Math.floor(beat / count), bar: Math.floor(start / song.rowsPerBar) * song.rowsPerBar };
   }
 
   /** Beats that still have an uncleared tile, lowest first. */

@@ -188,8 +188,9 @@ export default function App() {
               best={state.highScore}
               result={lastRun}
               standing={
-                // (Only a song as it is published counts: a draft, or one changed since, is not the chart everyone plays.)
-                lastRun && lastRun.score > 0 && activeSong.imported?.publication === 'live' ? (
+                // (Only a song as it is published counts: a draft, or one changed since, is not the chart everyone plays. And a
+                // run that can still be continued is not over: what it scores is not known yet.)
+                lastRun && lastRun.continueScore === null && lastRun.score > 0 && activeSong.imported?.publication === 'live' ? (
                   <RunStanding
                     songId={activeSong.id}
                     run={{ score: lastRun.score, laps: lastRun.stats.laps, chain: lastRun.stats.maxChain }}
@@ -197,6 +198,8 @@ export default function App() {
                   />
                 ) : null
               }
+              onContinue={game.continueRun}
+              onFinish={game.finish}
               onRestart={() => start(activeSong.id)}
               onMenu={quit}
             />
